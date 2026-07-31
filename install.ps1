@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Deploys the Caelestia terminal theme to Windows Terminal + WezTerm.
+    Deploys the Caelestia terminal theme to Windows Terminal.
 
 .DESCRIPTION
     Idempotent and safe to re-run.
@@ -17,7 +17,7 @@
     touched is backed up first.
 
 .PARAMETER Only
-    Run a subset: Packages, Font, Terminal, WezTerm, Starship, Profile.
+    Run a subset: Packages, Font, Terminal, Starship, Profile.
 
 .PARAMETER SkipPackages
     Deploy configs only; assume the toolchain is present.
@@ -31,12 +31,12 @@
 .EXAMPLE
     .\install.ps1
     .\install.ps1 -WhatIf
-    .\install.ps1 -Only Terminal,WezTerm
+    .\install.ps1 -Only Terminal,Starship
     .\install.ps1 -SkipPackages
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [ValidateSet('Packages', 'Font', 'Terminal', 'WezTerm', 'Starship', 'Profile')]
+    [ValidateSet('Packages', 'Font', 'Terminal', 'Starship', 'Profile')]
     [string[]]$Only,
 
     [switch]$SkipPackages,
@@ -192,14 +192,6 @@ $Packages = @(
         Test = {
             (Get-Command starship -ErrorAction SilentlyContinue) -or
             (Test-Path "$env:ProgramFiles\starship\bin\starship.exe")
-        }
-    }
-    @{
-        Id = 'wez.wezterm'; Name = 'WezTerm'; Scope = 'auto'
-        Test = {
-            (Get-Command wezterm -ErrorAction SilentlyContinue) -or
-            (Test-Path "$env:ProgramFiles\WezTerm\wezterm-gui.exe") -or
-            (Test-Path "$env:LOCALAPPDATA\Programs\WezTerm\wezterm-gui.exe")
         }
     }
     @{
@@ -395,9 +387,9 @@ function Install-NerdFont {
     # MUST be a system-wide install. Windows Terminal is a packaged (MSIX) app
     # and cannot see fonts installed for the current user only -- it silently
     # falls back to another family, which looks exactly like "the theme did not
-    # apply". WezTerm, being unpackaged, does see per-user fonts, so a per-user
-    # install produces the confusing state where one terminal is themed and the
-    # other is not. Hence: C:\Windows\Fonts + HKLM, which needs admin.
+    # apply", with no error anywhere. Unpackaged apps DO see per-user fonts, so
+    # checking with any normal tool makes it look installed. Hence:
+    # C:\Windows\Fonts + HKLM, which needs admin.
     if (Test-FontInstalledForAllUsers -FilePrefix $FontFilePrefix) {
         Write-Ok 'already installed for all users'
         Add-Result $NerdFontFamily 'present'
@@ -619,26 +611,6 @@ function Deploy-WindowsTerminal {
     }
 }
 
-# ================================================================= wezterm
-function Deploy-WezTerm {
-    Write-Step 'WezTerm'
-    $src  = Join-Path $Root 'config\wezterm\wezterm.lua'
-    $dest = Join-Path $env:USERPROFILE '.wezterm.lua'
-
-    if ((Test-Path $dest) -and
-        ((Get-FileHash $src).Hash -eq (Get-FileHash $dest).Hash)) {
-        Write-Ok 'already current'
-        Add-Result 'WezTerm config' 'present'
-        return
-    }
-    if (-not $PSCmdlet.ShouldProcess($dest, 'write wezterm.lua')) { return }
-
-    Backup-File $dest
-    Copy-Item $src $dest -Force
-    Write-Ok "-> $dest"
-    Add-Result 'WezTerm config' 'done' $dest
-}
-
 # ================================================================ starship
 function Deploy-Starship {
     Write-Step 'Starship'
@@ -719,7 +691,6 @@ $stages = [ordered]@{
     Packages = { Install-Toolchain }
     Font     = { Install-NerdFont }
     Terminal = { Deploy-WindowsTerminal }
-    WezTerm  = { Deploy-WezTerm }
     Starship = { Deploy-Starship }
     Profile  = { Deploy-Profile }
 }

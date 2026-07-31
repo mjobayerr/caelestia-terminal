@@ -1,7 +1,7 @@
 # caelestia → windows
 
 Port of the [caelestia](https://github.com/caelestia-dots/shell) look to Windows
-Terminal and WezTerm. One command on a fresh machine.
+Terminal. One command on a fresh machine.
 
 ```powershell
 git clone <this-repo> caelestia-windows
@@ -9,7 +9,8 @@ cd caelestia-windows
 .\install.ps1
 ```
 
-Idempotent — re-run it any time. Nothing needs admin rights.
+Idempotent — re-run it any time. Costs exactly one UAC prompt on a fresh
+machine (fonts must be installed system-wide), and none on later runs.
 
 ---
 
@@ -20,8 +21,8 @@ notification popups, dashboard, lockscreen, plus Material You theming driven by
 your wallpaper. It is not a terminal.
 
 So this repo ports the part that *can* cross over — the color scheme, font,
-prompt, and surface treatment — onto two Windows terminals. The bar, launcher
-and dashboard have no Windows equivalent and are out of scope.
+prompt, and surface treatment — onto Windows Terminal. The bar, launcher and
+dashboard have no Windows equivalent and are out of scope.
 
 Every value is extracted from upstream source, not eyeballed:
 
@@ -30,21 +31,18 @@ Every value is extracted from upstream source, not eyeballed:
 | ANSI 0–15 | `services/Colours.qml` → `term0`..`term15` |
 | Surface / text / cursor | `services/Colours.qml` → `m3*` Material 3 roles |
 | Font family + size | `plugin/src/Caelestia/Config/appearanceconfig.hpp` |
-| Opacity `0.85` | same file → `transparency.base` |
+| Opacity | same file → `transparency.base` (see deviation below) |
 
 `theme/caelestia.psd1` is the single source of truth for the Windows Terminal
-side. `config/wezterm/wezterm.lua` and `config/starship/starship.toml` carry the
+side. `config/starship/starship.toml` carries the
 same values inline so they stay readable and hand-editable.
 
 ---
 
 ## What you get
 
-- **Windows Terminal** — caelestia scheme, acrylic at 85%, CaskaydiaCove NF,
-  bar cursor, tinted tab row, hidden scrollbar.
-- **WezTerm** — same palette, plus the things Windows Terminal cannot do:
-  WebGPU renderer, 120 fps, eased cursor animation, no title bar, real acrylic
-  backdrop.
+- **Windows Terminal** — caelestia scheme, acrylic at 65%, CaskaydiaCove NF,
+  bar cursor, tinted tab row, hidden scrollbar, PowerShell 7 as default profile.
 - **Starship** — rounded Material 3 pill prompt.
 - **PowerShell profile** — fish-style inline autosuggestion, palette-matched
   syntax highlighting, history search on ↑/↓.
@@ -57,14 +55,18 @@ Read this before you are disappointed.
 
 **Windows Terminal has no animations.** No pane transitions, no cursor easing,
 no smooth scroll. Caelestia's "smooth" *is* the Hyprland + QML animation layer.
-This is not a settings gap — the feature does not exist. If smoothness is what
-you are chasing, use the WezTerm config; it is the half of this repo that can
-actually deliver it.
+This is not a settings gap — the feature does not exist in Windows Terminal, and
+no amount of configuration will add it.
 
 **Acrylic ≠ Hyprland blur.** Windows exposes one fixed blur. No radius, no
 passes, no noise, no vibrancy. It also desaturates when the window loses focus.
-0.85 opacity is upstream's own value and stays readable; go lower and text
-starts to swim.
+
+Opacity needs to be *low* for the blur to read at all. Measured on Windows 11:
+at `0.85` (upstream's `transparency.base`) and `0.75`, acrylic is
+indistinguishable from opaque against a dark background — the blur is applied,
+it just looks flat. It only becomes legible around `0.6`. This repo ships
+`0.65`, the one deliberate deviation from upstream values. Upstream also ships
+`transparency.enabled = false`, so there is no "correct" value to match here.
 
 **No custom corner radius or colored border.** You get Windows 11's default
 rounding. Caelestia's thick rounded corners and accent borders are compositor
@@ -79,8 +81,8 @@ terminal, the Starship prompt renders as tofu boxes. This is expected, not a
 broken config.
 
 **`CaskaydiaCove NF` is not in winget.** It is fetched from the Nerd Fonts
-GitHub release (~52 MB) and installed to user scope. `JetBrainsMono NF` is
-installed as an automatic fallback.
+GitHub release (~52 MB) and installed system-wide, which is what costs the UAC
+prompt. `JetBrainsMono NF` is installed as an automatic fallback.
 
 ---
 
@@ -107,9 +109,9 @@ unstyled. This is why every key in `starship.toml` is snake_case.
 **Windows Terminal cannot see per-user fonts at all.** It is a packaged (MSIX)
 app, so a font installed only for the current user is invisible to it — Terminal
 silently falls back to another family, which looks exactly like "the theme did
-not apply". WezTerm is unpackaged and *does* see per-user fonts, so a per-user
-install produces the confusing state where one terminal is themed and the other
-is not. Fonts must go in `C:\Windows\Fonts` + `HKLM`, which needs admin.
+not apply", with no error anywhere. Unpackaged apps *do* see per-user fonts, so
+every ordinary way of checking reports the font as installed. Fonts must go in
+`C:\Windows\Fonts` + `HKLM`, which needs admin.
 
 Critically, `InstalledFontCollection` reports per-user fonts too, so it **cannot**
 answer "will Terminal see this?". Check `HKLM` instead:
@@ -166,16 +168,16 @@ output — keep them or hand-tune to taste.
 .\install.ps1                          # everything
 .\install.ps1 -WhatIf                  # dry run, changes nothing
 .\install.ps1 -SkipPackages            # configs only
-.\install.ps1 -Only Terminal,WezTerm   # one or more stages
+.\install.ps1 -Only Terminal,Starship  # one or more stages
 ```
 
-Stages: `Packages`, `Font`, `Terminal`, `WezTerm`, `Starship`, `Profile`.
+Stages: `Packages`, `Font`, `Terminal`, `Starship`, `Profile`.
 
 ### Safety
 
 `settings.json` is **merged, never overwritten** — your profiles, keybindings
 and conda entries survive. A timestamped `.bak` is written next to it before
-every run. Existing `wezterm.lua` and PowerShell profiles are backed up to
+every run. Existing PowerShell profiles are backed up to
 `.bak` too.
 
 To roll back, restore the newest `.bak` in
@@ -188,7 +190,6 @@ To roll back, restore the newest `.bak` in
 ```
 install.ps1                      idempotent installer
 theme/caelestia.psd1             palette, single source of truth
-config/wezterm/wezterm.lua       -> ~/.wezterm.lua
 config/starship/starship.toml    -> ~/.config/starship.toml
 config/powershell/profile.ps1    -> both PS 5.1 and PS 7 profiles
 caelestia-shell/                 upstream clone, reference only (gitignored)
