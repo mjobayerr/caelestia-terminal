@@ -63,6 +63,15 @@ $NerdFontFamily  = 'CaskaydiaCove NF'
 $FontFilePrefix  = 'CaskaydiaCoveNerdFont'
 $FontStyles      = @('Regular', 'Bold', 'Italic', 'BoldItalic')
 
+# Work that needs admin, collected across stages and flushed in one elevated
+# child process so the run costs at most a single UAC prompt.
+$script:ElevatedActions = [System.Collections.Generic.List[object]]::new()
+$script:PendingVerify   = @()
+function Add-ElevatedAction {
+    param([string]$Label, [string]$Command)
+    $script:ElevatedActions.Add([pscustomobject]@{ Label = $Label; Command = $Command })
+}
+
 # Results collected for the closing summary.
 $script:Summary = [System.Collections.Generic.List[object]]::new()
 function Add-Result {
@@ -259,67 +268,67 @@ function Install-Toolchain {
     }
     if (-not $needsAdmin) { Update-PathFromRegistry; return }
 
-    # ---- 3. single elevated pass ----------------------------------------
-    Install-Elevated -Packages $needsAdmin
-    Update-PathFromRegistry
-
-    # ---- 4. verify -------------------------------------------------------
+    # ---- 3. queue for the single elevated pass ---------------------------
+    # Deferred, not run here: the Font stage also needs admin, and running both
+    # immediately would mean two UAC prompts. Both are flushed together later.
     foreach ($p in $needsAdmin) {
-        if (& $p.Test) {
-            Add-Result $p.Name 'installed' 'elevated'
-        } else {
-            Add-Result $p.Name 'failed' 'still missing after elevated install'
-        }
+        Add-ElevatedAction -Label $p.Name -Command @"
+winget install --id $($p.Id) --exact --silent ``
+    --accept-package-agreements --accept-source-agreements --disable-interactivity
+"@
+        $script:PendingVerify += $p
     }
 }
 
-function Install-Elevated {
-    param([object[]]$Packages)
+function Invoke-ElevatedQueue {
+    # Everything that needs admin -- winget machine-scope installs and the
+    # system-wide font install -- is collected first and run here in one child
+    # process, so the user sees exactly one UAC prompt for the whole run.
+    if (-not $script:ElevatedActions.Count) { return }
 
-    $names = ($Packages | ForEach-Object { $_.Name }) -join ', '
+    $names = ($script:ElevatedActions | ForEach-Object { $_.Label }) -join ', '
+    $body  = ($script:ElevatedActions | ForEach-Object {
+        "Write-Host '--- $($_.Label)'`n$($_.Command)"
+    }) -join "`n"
+
+    Write-Host ''
+    Write-Step 'Elevation'
 
     if (Test-IsAdmin) {
-        Write-Info "already elevated; installing: $names"
-        foreach ($p in $Packages) {
-            if (-not $PSCmdlet.ShouldProcess($p.Name, 'winget install')) { continue }
-            $code = Invoke-Winget -Id $p.Id -Scope 'default'
-            if ($code -ne 0) { Write-Bad "$($p.Name) failed (exit $code)" }
+        Write-Info "already elevated; running: $names"
+        if ($PSCmdlet.ShouldProcess($names, 'run elevated actions')) {
+            Invoke-Expression $body
         }
+        $script:ElevatedActions.Clear()
         return
     }
 
     if ($NoElevate) {
         Write-Warn2 "-NoElevate set; these need admin and were skipped: $names"
-        foreach ($p in $Packages) { Add-Result $p.Name 'skipped' 'needs admin' }
+        foreach ($a in $script:ElevatedActions) { Add-Result $a.Label 'skipped' 'needs admin' }
+        $script:ElevatedActions.Clear()
         return
     }
 
-    Write-Host ''
     Write-Warn2 "These require administrator rights: $names"
     Write-Warn2 'You will get ONE UAC prompt covering all of them.'
 
-    if (-not $Yes -and [Environment]::UserInteractive) {
+    if (-not $Yes -and [Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
         $answer = Read-Host '    Elevate now? [Y/n]'
         if ($answer -and $answer -notmatch '^(y|yes)$') {
-            Write-Warn2 'Declined. Skipping admin-scoped packages.'
-            foreach ($p in $Packages) { Add-Result $p.Name 'skipped' 'elevation declined' }
+            Write-Warn2 'Declined.'
+            foreach ($a in $script:ElevatedActions) { Add-Result $a.Label 'skipped' 'elevation declined' }
+            $script:ElevatedActions.Clear()
             return
         }
     }
-    if (-not $PSCmdlet.ShouldProcess($names, 'install elevated (one UAC prompt)')) { return }
+    if (-not $PSCmdlet.ShouldProcess($names, 'run elevated (one UAC prompt)')) { return }
 
-    # One child process installs everything, so UAC is shown exactly once.
     $log = Join-Path ([IO.Path]::GetTempPath()) "caelestia-elevated-$(Get-Date -Format yyyyMMddHHmmss).log"
-    $ids = ($Packages | ForEach-Object { "'$($_.Id)'" }) -join ','
     $inner = @"
 `$ErrorActionPreference = 'Continue'
 Start-Transcript -Path '$log' -Force | Out-Null
-foreach (`$id in @($ids)) {
-    Write-Host "installing `$id"
-    winget install --id `$id --exact --silent ``
-        --accept-package-agreements --accept-source-agreements --disable-interactivity
-    Write-Host "  exit=`$LASTEXITCODE"
-}
+$body
 Stop-Transcript | Out-Null
 "@
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($inner))
@@ -332,24 +341,72 @@ Stop-Transcript | Out-Null
     } catch {
         # Most common cause: the user dismissed the UAC dialog.
         Write-Bad "elevation failed or was cancelled: $($_.Exception.Message.Trim())"
-        foreach ($p in $Packages) { Add-Result $p.Name 'skipped' 'elevation cancelled' }
+        foreach ($a in $script:ElevatedActions) { Add-Result $a.Label 'skipped' 'elevation cancelled' }
     }
+    $script:ElevatedActions.Clear()
+
+    Update-PathFromRegistry
+    foreach ($p in $script:PendingVerify) {
+        if (& $p.Test) {
+            Add-Result $p.Name 'installed' 'elevated'
+        } else {
+            Add-Result $p.Name 'failed' 'still missing after elevated install'
+        }
+    }
+    $script:PendingVerify = @()
 }
 
 # ================================================================ nerd font
+function Test-FontInstalledForAllUsers {
+    # GDI (InstalledFontCollection) reports per-user fonts too, so it is NOT a
+    # valid check here -- see the comment in Install-NerdFont. Ask HKLM instead.
+    param([string]$FilePrefix)
+    $hklm = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts'
+    $props = (Get-ItemProperty $hklm -ErrorAction Ignore)
+    if (-not $props) { return $false }
+    [bool]($props.PSObject.Properties.Name | Where-Object { $_ -match [regex]::Escape($FilePrefix) })
+}
+
+function Remove-PerUserFontInstall {
+    # A per-user copy left over from an earlier run shadows nothing useful and
+    # only confuses diagnosis, since it is visible to GDI but not to Terminal.
+    param([string]$FilePrefix)
+    $fontDir = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Fonts'
+    $regPath = 'HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Fonts'
+    $removed = 0
+
+    if (Test-Path $regPath) {
+        (Get-ItemProperty $regPath).PSObject.Properties |
+            Where-Object { $_.Name -match [regex]::Escape($FilePrefix) } |
+            ForEach-Object {
+                Remove-ItemProperty -Path $regPath -Name $_.Name -ErrorAction Ignore
+                $removed++
+            }
+    }
+    Get-ChildItem $fontDir -Filter "$FilePrefix*" -ErrorAction Ignore |
+        Remove-Item -Force -ErrorAction Ignore
+
+    if ($removed) { Write-Ok "removed $removed stale per-user font entr(ies)" }
+}
+
 function Install-NerdFont {
     Write-Step "Font - $NerdFontFamily"
 
-    if ((Get-InstalledFontFamilies) -contains $NerdFontFamily) {
-        Write-Ok 'already installed'
+    # MUST be a system-wide install. Windows Terminal is a packaged (MSIX) app
+    # and cannot see fonts installed for the current user only -- it silently
+    # falls back to another family, which looks exactly like "the theme did not
+    # apply". WezTerm, being unpackaged, does see per-user fonts, so a per-user
+    # install produces the confusing state where one terminal is themed and the
+    # other is not. Hence: C:\Windows\Fonts + HKLM, which needs admin.
+    if (Test-FontInstalledForAllUsers -FilePrefix $FontFilePrefix) {
+        Write-Ok 'already installed for all users'
         Add-Result $NerdFontFamily 'present'
         return
     }
-    if (-not $PSCmdlet.ShouldProcess($NerdFontFamily, 'download and install')) { return }
+    if (-not $PSCmdlet.ShouldProcess($NerdFontFamily, 'download and install for all users')) { return }
 
-    # Per-user font install (Windows 10 1809+): copy into the user font dir and
-    # register under HKCU. Deliberately avoids the system font dir so this
-    # stage never contributes a UAC prompt.
+    Remove-PerUserFontInstall -FilePrefix $FontFilePrefix
+
     $url = "https://github.com/ryanoasis/nerd-fonts/releases/download/$NerdFontVersion/CascadiaCode.zip"
     $tmp = Join-Path ([IO.Path]::GetTempPath()) "caelestia-font-$(Get-Random)"
     $zip = "$tmp.zip"
@@ -361,13 +418,8 @@ function Install-NerdFont {
         Invoke-WithRetry -What 'font download' -Script {
             Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing -TimeoutSec 300
         }
-
         Expand-Archive -Path $zip -DestinationPath $tmp -Force
-
-        $fontDir = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\Fonts'
-        $regPath = 'HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Fonts'
-        New-Item -ItemType Directory -Force -Path $fontDir | Out-Null
-        if (-not (Test-Path $regPath)) { New-Item -Path $regPath -Force | Out-Null }
+        Remove-Item $zip -Force -ErrorAction SilentlyContinue
 
         $wanted = $FontStyles | ForEach-Object { "$FontFilePrefix-$_.ttf" }
         $files = Get-ChildItem $tmp -Filter '*.ttf' -Recurse |
@@ -377,33 +429,32 @@ function Install-NerdFont {
             throw "no matching TTFs in archive (expected $FontFilePrefix-Regular.ttf)"
         }
 
-        $installed = @()
-        foreach ($f in $files) {
-            $dest = Join-Path $fontDir $f.Name
-            if (-not (Test-Path $dest)) { Copy-Item $f.FullName $dest -Force }
-            New-ItemProperty -Path $regPath -Name "$($f.BaseName) (TrueType)" `
-                -Value $dest -PropertyType String -Force | Out-Null
-            $installed += $dest
-            Write-Ok "registered $($f.Name)"
-        }
+        # Stage just the four faces we want, then hand the copy+register to the
+        # shared elevated pass. $tmp is intentionally NOT cleaned up here -- the
+        # elevated child still needs it, and removes it when done.
+        $stage = Join-Path $tmp 'staged'
+        New-Item -ItemType Directory -Force -Path $stage | Out-Null
+        foreach ($f in $files) { Copy-Item $f.FullName (Join-Path $stage $f.Name) -Force }
+        Write-Ok "staged $($files.Count) faces for system-wide install"
 
-        # Make it visible now instead of after the next sign-out.
-        $loaded = Register-FontWithSession -Paths $installed
-        Write-Ok "loaded $loaded face(s) into the current session"
-
-        if ((Get-InstalledFontFamilies) -contains $NerdFontFamily) {
-            Add-Result $NerdFontFamily 'installed' "$($files.Count) styles, user scope"
-        } else {
-            Add-Result $NerdFontFamily 'installed' 'registered; sign out/in to activate'
-            Write-Warn2 'Font registered but not yet resolvable; sign out and back in.'
-        }
+        Add-ElevatedAction -Label "$NerdFontFamily (system font)" -Command @"
+`$fontDir = Join-Path `$env:WINDIR 'Fonts'
+`$reg = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts'
+Get-ChildItem '$stage' -Filter '*.ttf' | ForEach-Object {
+    Copy-Item `$_.FullName (Join-Path `$fontDir `$_.Name) -Force
+    # For fonts inside %WINDIR%\Fonts the value is the bare filename.
+    New-ItemProperty -Path `$reg -Name "`$(`$_.BaseName) (TrueType)" ``
+        -Value `$_.Name -PropertyType String -Force | Out-Null
+    Write-Host "  installed `$(`$_.Name)"
+}
+Remove-Item '$tmp' -Recurse -Force -ErrorAction SilentlyContinue
+"@
+        Add-Result $NerdFontFamily 'installed' 'system-wide (queued for elevation)'
     }
     catch {
         Write-Bad "font install failed: $($_.Exception.Message.Trim())"
         Write-Warn2 'JetBrainsMono NF will be used as fallback.'
         Add-Result $NerdFontFamily 'failed' $_.Exception.Message.Trim()
-    }
-    finally {
         Remove-Item $zip, $tmp -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
@@ -411,6 +462,15 @@ function Install-NerdFont {
 function Resolve-FontFace {
     # Never point a config at a family that is not installed.
     $families = Get-InstalledFontFamilies
+    # Only offer the Nerd Font if it is installed for ALL users. A per-user
+    # install shows up in GDI here but is invisible to Windows Terminal, so
+    # trusting GDI alone writes a font name Terminal cannot resolve.
+    if (($families -contains $NerdFontFamily) -and
+        -not (Test-FontInstalledForAllUsers -FilePrefix $FontFilePrefix)) {
+        Write-Warn2 "$NerdFontFamily is per-user only; Windows Terminal cannot see it"
+        $families = $families | Where-Object { $_ -ne $NerdFontFamily }
+    }
+
     # These are GDI family names as reported by InstalledFontCollection, which
     # differ from the TTF filenames. Verify with:
     #   [Drawing.Text.InstalledFontCollection]::new().Families.Name
@@ -671,6 +731,26 @@ foreach ($name in $stages.Keys) {
         # One broken stage must not abort the rest of the run.
         Write-Bad "stage '$name' failed: $($_.Exception.Message.Trim())"
         Add-Result $name 'failed' $_.Exception.Message.Trim()
+    }
+
+    # Packages and Font both queue admin work. Flush once, after both have had
+    # their say, so the run costs a single UAC prompt -- and before Terminal,
+    # which needs to know the final font name.
+    $lastQueueingStage = if (Test-Stage 'Font') { 'Font' } else { 'Packages' }
+    if ($name -eq $lastQueueingStage) {
+        try {
+            Invoke-ElevatedQueue
+
+            # Load the newly installed faces so this session (and anything
+            # launched from it) resolves them without a sign-out.
+            $sysFonts = Get-ChildItem (Join-Path $env:WINDIR 'Fonts') `
+                -Filter "$FontFilePrefix*.ttf" -ErrorAction Ignore
+            if ($sysFonts) {
+                [void](Register-FontWithSession -Paths $sysFonts.FullName)
+            }
+        } catch {
+            Write-Bad "elevation stage failed: $($_.Exception.Message.Trim())"
+        }
     }
 }
 

@@ -104,10 +104,30 @@ while parsing a style string, so a camelCase key like `m3primaryCont` never
 matches its own definition. There is no warning — the segment just renders
 unstyled. This is why every key in `starship.toml` is snake_case.
 
-**A per-user font is invisible until you sign out** unless you call
+**Windows Terminal cannot see per-user fonts at all.** It is a packaged (MSIX)
+app, so a font installed only for the current user is invisible to it — Terminal
+silently falls back to another family, which looks exactly like "the theme did
+not apply". WezTerm is unpackaged and *does* see per-user fonts, so a per-user
+install produces the confusing state where one terminal is themed and the other
+is not. Fonts must go in `C:\Windows\Fonts` + `HKLM`, which needs admin.
+
+Critically, `InstalledFontCollection` reports per-user fonts too, so it **cannot**
+answer "will Terminal see this?". Check `HKLM` instead:
+
+```powershell
+(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Fonts').PSObject.Properties.Name -match 'Caskaydia'
+```
+
+**A newly installed font is invisible until you sign out** unless you call
 `AddFontResourceW` and broadcast `WM_FONTCHANGE`. Copying the TTF and adding the
-HKCU registry entry is necessary but not sufficient. `install.ps1` does the
-P/Invoke so the font is usable immediately.
+registry entry is necessary but not sufficient. `install.ps1` does the P/Invoke
+so the font is usable immediately.
+
+**Elevation is pooled.** Both the package stage and the font stage need admin.
+They push their work into one queue that is flushed in a single elevated child
+process between the Font and Terminal stages, so the run costs exactly one UAC
+prompt rather than two. `-NoElevate` skips it; `-Yes` skips only the
+confirmation, not the UAC dialog itself.
 
 **PowerShell 7 installs per-user without UAC.** `winget install --scope user`
 puts `pwsh.exe` in `WindowsApps` as an MSIX alias, *not* under Program Files —
