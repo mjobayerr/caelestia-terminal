@@ -1,6 +1,12 @@
-# Caelestia prompt for Starship.
-# Palette matches theme/caelestia.psd1. Rounded pill segments echo the
-# Material 3 shapes of the caelestia bar. Requires a Nerd Font.
+# Starship prompt -- TEMPLATE. Requires a Nerd Font.
+#
+# This is not the file starship reads. install.ps1 copies it to
+# ~/.config/starship.toml and REPLACES the [palettes.caelestia] block below with
+# the active scheme from config.psd1. The colours here are placeholders and are
+# never used; edit config.psd1 to change them.
+#
+# Everything else (layout, symbols, module settings) IS copied verbatim, so edit
+# it here -- not in ~/.config/starship.toml, which is overwritten on every run.
 #
 # IMPORTANT: palette keys MUST be lowercase. Starship lowercases colour names
 # when parsing a style string, so a camelCase key like `m3primaryCont` never
