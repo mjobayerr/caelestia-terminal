@@ -1,0 +1,6 @@
+# Upstream reference clone — re-fetch with:
+#   git clone --depth 1 https://github.com/caelestia-dots/shell.git caelestia-shell
+caelestia-shell/
+
+*.bak
+*.bak-*
