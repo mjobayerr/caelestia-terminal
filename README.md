@@ -132,6 +132,22 @@ answer "will Terminal see this?". Check `HKLM` instead:
 registry entry is necessary but not sufficient. `install.ps1` does the P/Invoke
 so the font is usable immediately.
 
+**Valid JSON is not valid settings.** Windows Terminal checks `settings.json`
+against a schema, and a single bad enum value makes it reject the *entire file*
+and silently revert to stock defaults behind one dialog — your theme, font and
+default profile all quietly disappear. `ConvertFrom-Json` succeeding proves only
+that the JSON parses.
+
+This bit already: `"monitor": "toCursor"` on a `globalSummon` binding is
+well-formed JSON, but the allowed values are `any | toCurrent | toMouse`.
+`install.ps1` now validates every enum it writes *before* touching the file and
+refuses to write if anything is wrong. Extend the table in
+`Test-TerminalSettings` when adding a new setting, and run:
+
+```powershell
+pwsh -NoProfile -File tests\Test-Settings.ps1
+```
+
 **Elevation is pooled.** Both the package stage and the font stage need admin.
 They push their work into one queue that is flushed in a single elevated child
 process between the Font and Terminal stages, so the run costs exactly one UAC

@@ -473,6 +473,80 @@ function Resolve-FontFace {
     return 'Consolas'
 }
 
+function Test-TerminalSettings {
+    <#
+        Windows Terminal validates settings.json against a schema, and ONE bad
+        enum value rejects the entire file -- Terminal then silently reverts to
+        stock defaults behind a single dialog. ConvertFrom-Json succeeding proves
+        only that the JSON is well-formed, not that Terminal will accept it, so
+        it is not sufficient verification on its own.
+
+        This checks every enum-valued setting the installer writes. Extend the
+        table when adding a new one.
+    #>
+    param($Json)
+
+    $enums = @{
+        'profiles.defaults.cursorShape'      = @('bar','vintage','underscore','filledBox','emptyBox','doubleUnderscore')
+        'profiles.defaults.antialiasingMode' = @('grayscale','cleartype','aliased')
+        'profiles.defaults.scrollbarState'   = @('visible','hidden','always')
+        'profiles.defaults.bellStyle'        = @('audible','window','taskbar','all','none')
+        'profiles.defaults.adjustIndistinguishableColors' = @('never','indexed','always')
+        'tabWidthMode'                       = @('equal','titleLength','compact')
+    }
+    $actionEnums = @{
+        'globalSummon.monitor'   = @('any','toCurrent','toMouse')
+        'moveFocus.direction'    = @('left','right','up','down','previous','nextInOrder','previousInOrder','first','parent','child')
+        'splitPane.split'        = @('up','down','left','right','auto')
+        'splitPane.splitMode'    = @('duplicate')
+        'scrollToMark.direction' = @('previous','next','first','last')
+    }
+
+    $bad = @()
+
+    foreach ($path in $enums.Keys) {
+        $node = $Json
+        foreach ($part in $path.Split('.')) {
+            if ($null -eq $node -or $node.PSObject.Properties.Name -notcontains $part) { $node = $null; break }
+            $node = $node.$part
+        }
+        if ($null -ne $node -and $enums[$path] -notcontains $node) {
+            $bad += "$path = '$node' (allowed: $($enums[$path] -join ' | '))"
+        }
+    }
+
+    if ($Json.PSObject.Properties.Name -contains 'keybindings') {
+        foreach ($kb in $Json.keybindings) {
+            if ($kb.PSObject.Properties.Name -notcontains 'command') { continue }
+            $c = $kb.command
+            if ($c -is [string]) { continue }
+            if ($c.PSObject.Properties.Name -notcontains 'action') { continue }
+            foreach ($key in $actionEnums.Keys) {
+                $act, $prop = $key.Split('.')
+                if ($c.action -ne $act) { continue }
+                if ($c.PSObject.Properties.Name -notcontains $prop) { continue }
+                if ($actionEnums[$key] -notcontains $c.$prop) {
+                    $bad += "keybinding '$($kb.keys)' $key = '$($c.$prop)' (allowed: $($actionEnums[$key] -join ' | '))"
+                }
+            }
+        }
+    }
+
+    # A theme reference that names no defined theme is also rejected.
+    if ($Json.PSObject.Properties.Name -contains 'theme') {
+        $builtin = @('system','light','dark')
+        $defined = @()
+        if ($Json.PSObject.Properties.Name -contains 'themes' -and $Json.themes) {
+            $defined = @($Json.themes.name)
+        }
+        if ($Json.theme -notin ($builtin + $defined)) {
+            $bad += "theme = '$($Json.theme)' but no such theme is defined"
+        }
+    }
+
+    return $bad
+}
+
 function Backup-File {
     param([string]$Path)
     if (-not (Test-Path $Path)) { return }
@@ -624,9 +698,12 @@ function Deploy-WindowsTerminal {
                 [pscustomobject]@{ keys = 'ctrl+shift+z'; command = 'togglePaneZoom' }
                 # quake-style dropdown: slides a terminal down from the top of
                 # the screen from anywhere. Requires Terminal to be running.
+                # monitor must be one of: any | toCurrent | toMouse.
+                # 'toCursor' is NOT valid and rejects the entire settings file,
+                # which drops Terminal to stock defaults with only a dialog.
                 [pscustomobject]@{ keys = 'win+sc(41)'; command = [pscustomobject]@{
                     action = 'globalSummon'; name = '_quake'
-                    dropdownDuration = 150; toggleVisibility = $true; monitor = 'toCursor' } }
+                    dropdownDuration = 150; toggleVisibility = $true; monitor = 'toMouse' } }
             )
             $existing = @()
             if ($json.PSObject.Properties.Name -contains 'keybindings' -and $json.keybindings) {
@@ -655,6 +732,17 @@ function Deploy-WindowsTerminal {
                 } elseif (-not $ps7) {
                     Write-Warn2 'no PowerShell 7 profile found; leaving default as-is'
                 }
+            }
+
+            # Validate BEFORE writing. One bad enum makes Terminal reject the
+            # entire file and silently revert to stock defaults, so refusing to
+            # write beats leaving a broken settings.json behind.
+            $problems = Test-TerminalSettings -Json $json
+            if ($problems) {
+                Write-Bad "refusing to write $label - invalid settings:"
+                $problems | ForEach-Object { Write-Bad "    $_" }
+                Add-Result "Windows Terminal ($label)" 'failed' 'schema validation'
+                continue
             }
 
             $after = $json | ConvertTo-Json -Depth 32
