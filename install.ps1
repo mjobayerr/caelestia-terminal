@@ -51,7 +51,12 @@ $Root  = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Theme = Import-PowerShellDataFile (Join-Path $Root 'theme\caelestia.psd1')
 
 $NerdFontVersion = 'v3.4.0'
-$NerdFontFamily  = 'CaskaydiaCove Nerd Font'
+# The family the patched Cascadia actually reports to GDI is 'CaskaydiaCove NF'.
+# The files are named CaskaydiaCoveNerdFont-*.ttf, which is NOT the family name.
+# Using the filename spelling here makes every detection miss, so the font
+# re-downloads on every run and configs fall back to another family.
+$NerdFontFamily  = 'CaskaydiaCove NF'
+$FontFilePrefix  = 'CaskaydiaCoveNerdFont'
 $FontStyles      = @('Regular', 'Bold', 'Italic', 'BoldItalic')
 
 # Results collected for the closing summary.
@@ -93,6 +98,43 @@ function Get-InstalledFontFamilies {
     (New-Object System.Drawing.Text.InstalledFontCollection).Families.Name
 }
 
+function Register-FontWithSession {
+    # Copying a TTF into the per-user font dir and adding the HKCU entry makes
+    # the font persist across logon, but Windows will not surface it to running
+    # or newly launched apps until AddFontResourceW loads it and WM_FONTCHANGE
+    # is broadcast. Without this the font is invisible until sign-out.
+    param([string[]]$Paths)
+
+    if (-not ('CaelestiaFontLoader' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class CaelestiaFontLoader {
+    [DllImport("gdi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    public static extern int AddFontResourceW(string lpFileName);
+
+    [DllImport("user32.dll", CharSet = CharSet.Auto)]
+    public static extern IntPtr SendMessageTimeout(
+        IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam,
+        uint fuFlags, uint uTimeout, out UIntPtr lpdwResult);
+}
+'@
+    }
+
+    $added = 0
+    foreach ($p in $Paths) { $added += [CaelestiaFontLoader]::AddFontResourceW($p) }
+
+    $result = [UIntPtr]::Zero
+    $HWND_BROADCAST = [IntPtr]0xffff
+    $WM_FONTCHANGE  = 0x001D
+    $SMTO_ABORTIFHUNG = 2
+    [void][CaelestiaFontLoader]::SendMessageTimeout(
+        $HWND_BROADCAST, $WM_FONTCHANGE, [IntPtr]::Zero, [IntPtr]::Zero,
+        $SMTO_ABORTIFHUNG, 1000, [ref]$result)
+
+    return $added
+}
+
 function Set-JsonProperty {
     # PS 5.1's ConvertFrom-Json yields PSCustomObject, which has no indexer
     # assignment. This adds-or-updates a property on one.
@@ -122,10 +164,14 @@ function Invoke-WithRetry {
 #        'auto'    - try user scope first, fall back to the elevated batch
 $Packages = @(
     @{
-        Id = 'Microsoft.PowerShell'; Name = 'PowerShell 7'; Scope = 'machine'
+        # 'auto', not 'machine': winget installs PS7 per-user without any UAC
+        # prompt. Forcing machine scope elevates for no reason.
+        Id = 'Microsoft.PowerShell'; Name = 'PowerShell 7'; Scope = 'auto'
         Test = {
             (Get-Command pwsh -ErrorAction SilentlyContinue) -or
-            (Test-Path "$env:ProgramFiles\PowerShell\7\pwsh.exe")
+            (Test-Path "$env:ProgramFiles\PowerShell\7\pwsh.exe") -or
+            (Test-Path "$env:LOCALAPPDATA\Programs\PowerShell\7\pwsh.exe") -or
+            (Test-Path "$env:LOCALAPPDATA\Microsoft\WindowsApps\pwsh.exe")
         }
     }
     @{
@@ -319,23 +365,34 @@ function Install-NerdFont {
         New-Item -ItemType Directory -Force -Path $fontDir | Out-Null
         if (-not (Test-Path $regPath)) { New-Item -Path $regPath -Force | Out-Null }
 
-        $wanted = $FontStyles | ForEach-Object { "CaskaydiaCoveNerdFont-$_.ttf" }
+        $wanted = $FontStyles | ForEach-Object { "$FontFilePrefix-$_.ttf" }
         $files = Get-ChildItem $tmp -Filter '*.ttf' -Recurse |
                  Where-Object { $wanted -contains $_.Name }
 
         if (-not $files) {
-            throw 'no matching TTFs in archive (expected CaskaydiaCoveNerdFont-Regular.ttf)'
+            throw "no matching TTFs in archive (expected $FontFilePrefix-Regular.ttf)"
         }
 
+        $installed = @()
         foreach ($f in $files) {
             $dest = Join-Path $fontDir $f.Name
             if (-not (Test-Path $dest)) { Copy-Item $f.FullName $dest -Force }
             New-ItemProperty -Path $regPath -Name "$($f.BaseName) (TrueType)" `
                 -Value $dest -PropertyType String -Force | Out-Null
+            $installed += $dest
             Write-Ok "registered $($f.Name)"
         }
-        Add-Result $NerdFontFamily 'installed' "$($files.Count) styles, user scope"
-        Write-Warn2 'Restart your terminal for the font to appear.'
+
+        # Make it visible now instead of after the next sign-out.
+        $loaded = Register-FontWithSession -Paths $installed
+        Write-Ok "loaded $loaded face(s) into the current session"
+
+        if ((Get-InstalledFontFamilies) -contains $NerdFontFamily) {
+            Add-Result $NerdFontFamily 'installed' "$($files.Count) styles, user scope"
+        } else {
+            Add-Result $NerdFontFamily 'installed' 'registered; sign out/in to activate'
+            Write-Warn2 'Font registered but not yet resolvable; sign out and back in.'
+        }
     }
     catch {
         Write-Bad "font install failed: $($_.Exception.Message.Trim())"
@@ -350,8 +407,11 @@ function Install-NerdFont {
 function Resolve-FontFace {
     # Never point a config at a family that is not installed.
     $families = Get-InstalledFontFamilies
-    foreach ($c in @($NerdFontFamily, 'JetBrainsMono Nerd Font', 'JetBrainsMono NF',
-                     'JetBrainsMono NFM', 'Cascadia Mono', 'Consolas')) {
+    # These are GDI family names as reported by InstalledFontCollection, which
+    # differ from the TTF filenames. Verify with:
+    #   [Drawing.Text.InstalledFontCollection]::new().Families.Name
+    foreach ($c in @($NerdFontFamily, 'JetBrainsMono NF', 'JetBrainsMono NFM',
+                     'Cascadia Mono', 'Consolas')) {
         if ($families -contains $c) { return $c }
     }
     return 'Consolas'
@@ -388,8 +448,10 @@ function Deploy-WindowsTerminal {
         $label = Split-Path (Split-Path $settingsPath -Parent) -Leaf
 
         try {
-            Backup-File $settingsPath
             $json = Get-Content $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
+            # Round-trip the untouched object so the comparison below is against
+            # our own serialiser, not the file's hand-formatted whitespace.
+            $before = $json | ConvertTo-Json -Depth 32
 
             # -- colour scheme ---------------------------------------------
             $scheme = [ordered]@{
@@ -455,9 +517,16 @@ function Deploy-WindowsTerminal {
             Set-JsonProperty $d 'scrollbarState'   'hidden'
             Set-JsonProperty $d 'bellStyle'        'none'
 
-            $json | ConvertTo-Json -Depth 32 | Set-Content $settingsPath -Encoding UTF8
-            Write-Ok "themed $label (font: $face)"
-            Add-Result "Windows Terminal ($label)" 'done' "font: $face"
+            $after = $json | ConvertTo-Json -Depth 32
+            if ($before -eq $after) {
+                Write-Ok "already themed (font: $face)"
+                Add-Result "Windows Terminal ($label)" 'present' "font: $face"
+            } else {
+                Backup-File $settingsPath
+                $after | Set-Content $settingsPath -Encoding UTF8
+                Write-Ok "themed $label (font: $face)"
+                Add-Result "Windows Terminal ($label)" 'done' "font: $face"
+            }
         }
         catch {
             Write-Bad "failed on $label`: $($_.Exception.Message.Trim())"
@@ -496,10 +565,12 @@ function Deploy-Starship {
     if (-not $PSCmdlet.ShouldProcess($dest, 'write starship.toml')) { return }
 
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $changed = $false
     if (-not ((Test-Path $dest) -and ((Get-FileHash $src).Hash -eq (Get-FileHash $dest).Hash))) {
         Backup-File $dest
         Copy-Item $src $dest -Force
         Write-Ok "-> $dest"
+        $changed = $true
     } else {
         Write-Ok 'already current'
     }
@@ -507,8 +578,9 @@ function Deploy-Starship {
     if ([Environment]::GetEnvironmentVariable('STARSHIP_CONFIG', 'User') -ne $dest) {
         [Environment]::SetEnvironmentVariable('STARSHIP_CONFIG', $dest, 'User')
         Write-Ok 'STARSHIP_CONFIG set'
+        $changed = $true
     }
-    Add-Result 'Starship config' 'done' $dest
+    Add-Result 'Starship config' $(if ($changed) { 'done' } else { 'present' }) $dest
 }
 
 # ================================================================= profile
@@ -525,6 +597,7 @@ function Deploy-Profile {
         $targets += $PROFILE.CurrentUserCurrentHost
     }
 
+    $changed = $false
     foreach ($t in ($targets | Select-Object -Unique)) {
         if ((Test-Path $t) -and ((Get-FileHash $src).Hash -eq (Get-FileHash $t).Hash)) {
             Write-Ok "already current - $(Split-Path (Split-Path $t -Parent) -Leaf)"
@@ -535,8 +608,9 @@ function Deploy-Profile {
         Backup-File $t
         Copy-Item $src $t -Force
         Write-Ok "-> $t"
+        $changed = $true
     }
-    Add-Result 'PowerShell profile' 'done'
+    Add-Result 'PowerShell profile' $(if ($changed) { 'done' } else { 'present' })
 
     # conda's own prompt prefix fights the starship theme.
     if (Get-Command conda -ErrorAction SilentlyContinue) {

@@ -84,6 +84,45 @@ installed as an automatic fallback.
 
 ---
 
+## Gotchas already handled
+
+These cost real debugging time. They are fixed in the repo; documented so you
+do not reintroduce them when editing.
+
+**The font family is `CaskaydiaCove NF`, not `CaskaydiaCove Nerd Font`.** The
+TTFs are named `CaskaydiaCoveNerdFont-Regular.ttf`, but the family GDI reports
+is `CaskaydiaCove NF`. Using the filename spelling makes every detection miss —
+the installer re-downloads 52 MB on every run and configs silently fall back to
+another font. Verify a family name with:
+
+```powershell
+Add-Type -AssemblyName System.Drawing; (New-Object System.Drawing.Text.InstalledFontCollection).Families.Name
+```
+
+**Starship palette keys must be lowercase.** Starship lowercases colour names
+while parsing a style string, so a camelCase key like `m3primaryCont` never
+matches its own definition. There is no warning — the segment just renders
+unstyled. This is why every key in `starship.toml` is snake_case.
+
+**A per-user font is invisible until you sign out** unless you call
+`AddFontResourceW` and broadcast `WM_FONTCHANGE`. Copying the TTF and adding the
+HKCU registry entry is necessary but not sufficient. `install.ps1` does the
+P/Invoke so the font is usable immediately.
+
+**PowerShell 7 installs per-user without UAC.** `winget install --scope user`
+puts `pwsh.exe` in `WindowsApps` as an MSIX alias, *not* under Program Files —
+so probe that path too, or you will elevate for nothing and then fail to find it.
+
+**`.ps1` files must be ASCII.** Windows PowerShell reads scripts as ANSI when
+there is no BOM, so a stray em dash in a comment breaks string parsing several
+lines later with a baffling error.
+
+**Use `-ErrorAction Ignore`, not `SilentlyContinue`, in a profile.**
+`SilentlyContinue` still appends to `$Error`, so every new session opens with a
+phantom exception.
+
+---
+
 ## Re-theming from a wallpaper
 
 To reproduce upstream's wallpaper-driven Material You behaviour:

@@ -1,11 +1,16 @@
 # Caelestia prompt for Starship.
 # Palette matches theme/caelestia.psd1. Rounded pill segments echo the
 # Material 3 shapes of the caelestia bar. Requires a Nerd Font.
+#
+# IMPORTANT: palette keys MUST be lowercase. Starship lowercases colour names
+# when parsing a style string, so a camelCase key like `m3primaryCont` never
+# matches its definition and the style is dropped *silently* -- no warning, the
+# segment just renders unstyled. That is why every name below is snake_case.
 
 "$schema" = 'https://starship.rs/config-schema.json'
 
 format = """
-[](fg:m3primary)\
+[](fg:m3_primary)\
 $os\
 $directory\
 $git_branch\
@@ -15,7 +20,7 @@ $nodejs\
 $rust\
 $golang\
 $c\
-[](fg:m3surfaceHigh)\
+[](fg:m3_surface_high)\
 $fill\
 $cmd_duration\
 $time\
@@ -23,33 +28,36 @@ $line_break\
 $character"""
 
 add_newline = true
-continuation_prompt = "[▸▸ ](fg:m3outline)"
+continuation_prompt = "[▸▸ ](fg:m3_outline)"
+
+# Must stay above the first [table] header. A bare key after a table header is
+# parsed as a member of that table, which would silently make this
+# `palettes.caelestia.palette` and leave every colour below unresolved.
+palette = "caelestia"
 
 [palettes.caelestia]
-m3primary        = "#ffb0ca"
-m3onPrimary      = "#541d34"
-m3primaryCont    = "#6f334a"
-m3onPrimaryCont  = "#ffd9e3"
-m3secondary      = "#e2bdc7"
-m3tertiary       = "#f0bc95"
-m3onTertiary     = "#48290c"
-m3error          = "#ffb4ab"
-m3success        = "#B5CCBA"
-m3surface        = "#191114"
-m3surfaceLow     = "#22191c"
-m3surfaceCont    = "#261d20"
-m3surfaceHigh    = "#31282a"
-m3onSurface      = "#efdfe2"
-m3outline        = "#9e8c91"
-
-palette = "caelestia"
+m3_primary              = "#ffb0ca"
+m3_on_primary           = "#541d34"
+m3_primary_container    = "#6f334a"
+m3_on_primary_container = "#ffd9e3"
+m3_secondary            = "#e2bdc7"
+m3_tertiary             = "#f0bc95"
+m3_on_tertiary          = "#48290c"
+m3_error                = "#ffb4ab"
+m3_success              = "#b5ccba"
+m3_surface              = "#191114"
+m3_surface_low          = "#22191c"
+m3_surface_container    = "#261d20"
+m3_surface_high         = "#31282a"
+m3_on_surface           = "#efdfe2"
+m3_outline              = "#9e8c91"
 
 [fill]
 symbol = " "
 
 [os]
 disabled = false
-style = "bg:m3primary fg:m3onPrimary"
+style = "bg:m3_primary fg:m3_on_primary"
 format = "[ $symbol ]($style)"
 
 [os.symbols]
@@ -59,12 +67,12 @@ Ubuntu = ""
 Linux = ""
 
 [directory]
-style = "bg:m3primaryCont fg:m3onPrimaryCont"
-format = "[](fg:m3primary bg:m3primaryCont)[ $path ]($style)[$read_only]($read_only_style)"
+style = "bg:m3_primary_container fg:m3_on_primary_container"
+format = "[](fg:m3_primary bg:m3_primary_container)[ $path ]($style)[$read_only]($read_only_style)"
 truncation_length = 3
 truncation_symbol = "…/"
-read_only = "󰌾 "
-read_only_style = "bg:m3primaryCont fg:m3error"
+read_only = " 󰌾 "
+read_only_style = "bg:m3_primary_container fg:m3_error"
 
 [directory.substitutions]
 "Documents" = "󰈙"
@@ -75,11 +83,11 @@ read_only_style = "bg:m3primaryCont fg:m3error"
 
 [git_branch]
 symbol = ""
-style = "bg:m3surfaceHigh fg:m3tertiary"
-format = "[](fg:m3primaryCont bg:m3surfaceHigh)[ $symbol $branch ]($style)"
+style = "bg:m3_surface_high fg:m3_tertiary"
+format = "[](fg:m3_primary_container bg:m3_surface_high)[ $symbol $branch ]($style)"
 
 [git_status]
-style = "bg:m3surfaceHigh fg:m3error"
+style = "bg:m3_surface_high fg:m3_error"
 format = "[$all_status$ahead_behind ]($style)"
 conflicted = "󰞇 "
 ahead = "⇡${count} "
@@ -94,41 +102,41 @@ deleted = " ${count} "
 
 [python]
 symbol = ""
-style = "bg:m3surfaceHigh fg:m3secondary"
+style = "bg:m3_surface_high fg:m3_secondary"
 format = "[ $symbol $version( \\($virtualenv\\)) ]($style)"
 
 [nodejs]
 symbol = ""
-style = "bg:m3surfaceHigh fg:m3success"
+style = "bg:m3_surface_high fg:m3_success"
 format = "[ $symbol $version ]($style)"
 
 [rust]
 symbol = ""
-style = "bg:m3surfaceHigh fg:m3tertiary"
+style = "bg:m3_surface_high fg:m3_tertiary"
 format = "[ $symbol $version ]($style)"
 
 [golang]
 symbol = ""
-style = "bg:m3surfaceHigh fg:m3secondary"
+style = "bg:m3_surface_high fg:m3_secondary"
 format = "[ $symbol $version ]($style)"
 
 [c]
 symbol = ""
-style = "bg:m3surfaceHigh fg:m3secondary"
+style = "bg:m3_surface_high fg:m3_secondary"
 format = "[ $symbol $version ]($style)"
 
 [cmd_duration]
 min_time = 1000
-style = "fg:m3tertiary"
+style = "fg:m3_tertiary"
 format = "[󱎫 $duration ]($style)"
 
 [time]
 disabled = false
 time_format = "%H:%M"
-style = "fg:m3outline"
+style = "fg:m3_outline"
 format = "[󰥔 $time]($style)"
 
 [character]
-success_symbol = "[󰘧](bold fg:m3primary)"
-error_symbol = "[󰘧](bold fg:m3error)"
-vimcmd_symbol = "[󰘧](bold fg:m3success)"
+success_symbol = "[󰘧](bold fg:m3_primary)"
+error_symbol = "[󰘧](bold fg:m3_error)"
+vimcmd_symbol = "[󰘧](bold fg:m3_success)"

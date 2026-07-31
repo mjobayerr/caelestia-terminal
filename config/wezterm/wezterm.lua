@@ -39,9 +39,12 @@ config.colors = {
 }
 
 -- ------------------------------------------------------------------ font --
+-- Family name is 'CaskaydiaCove NF' -- that is what the patched Cascadia
+-- actually reports, NOT 'CaskaydiaCove Nerd Font'. Getting this wrong makes
+-- WezTerm silently fall through to the next entry.
 config.font = wezterm.font_with_fallback {
-  'CaskaydiaCove Nerd Font',
-  'JetBrainsMono Nerd Font',
+  'CaskaydiaCove NF',
+  'JetBrainsMono NF',
   'Cascadia Code',
 }
 config.font_size = 12.0
@@ -79,12 +82,27 @@ config.tab_max_width = 28
 
 -- ---------------------------------------------------------------- shell --
 -- Prefer PowerShell 7; fall back to Windows PowerShell 5.1 if absent.
-local pwsh = 'C:/Program Files/PowerShell/7/pwsh.exe'
-local f = io.open(pwsh, 'r')
-if f then
-  f:close()
+-- winget installs PS7 per-user by default, which lands in WindowsApps as an
+-- MSIX execution alias -- not under Program Files. Probe every known layout.
+local function first_existing(paths)
+  for _, p in ipairs(paths) do
+    local f = io.open(p, 'r')
+    if f then f:close() return p end
+  end
+  return nil
+end
+
+local home = os.getenv('USERPROFILE') or ''
+local pwsh = first_existing {
+  home .. '/AppData/Local/Microsoft/WindowsApps/pwsh.exe',
+  home .. '/AppData/Local/Programs/PowerShell/7/pwsh.exe',
+  'C:/Program Files/PowerShell/7/pwsh.exe',
+}
+
+if pwsh then
   config.default_prog = { pwsh, '-NoLogo' }
 else
+  pwsh = 'powershell.exe'
   config.default_prog = { 'powershell.exe', '-NoLogo' }
 end
 

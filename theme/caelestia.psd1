@@ -37,8 +37,11 @@
     BrightCyan   = '#ffd1c0'
     BrightWhite  = '#ffffff'
 
-    # appearanceconfig.hpp: mono family, mono.medium size, transparency.base
-    FontFace   = 'CaskaydiaCove Nerd Font'
+    # appearanceconfig.hpp: mono family, mono.medium size, transparency.base.
+    # FontFace is the GDI family name, which is 'CaskaydiaCove NF' -- not the
+    # 'CaskaydiaCoveNerdFont' spelling used for the TTF filenames. install.ps1
+    # resolves this against the installed families and falls back if missing.
+    FontFace   = 'CaskaydiaCove NF'
     FontSize   = 12
     Opacity    = 0.85
 }
