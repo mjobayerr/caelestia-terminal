@@ -45,9 +45,13 @@
     FontSize   = 12
 
     # Upstream's transparency.base is 0.85, but upstream also ships
-    # transparency.enabled = false. At 0.85 over a dark desktop, Windows acrylic
-    # is visually indistinguishable from opaque. 0.75 makes the blur actually
-    # read as blur. This is the one deliberate deviation from upstream values.
-    # Raise back to 0.85 for exact parity, or drop toward 0.6 for more.
-    Opacity    = 0.75
+    # transparency.enabled = false, so there is no upstream value to match for
+    # a terminal that actually wants the blur visible.
+    #
+    # Measured on Windows 11 with acrylic on: 0.85 and 0.75 are both
+    # indistinguishable from opaque against a dark background -- the blur is
+    # there, it just reads as flat. Blur only becomes legible around 0.6 and
+    # below. 0.65 keeps text crisp while the backdrop is clearly blurred.
+    # Raise to 0.85 for exact upstream parity (and effectively no visible blur).
+    Opacity    = 0.65
 }
