@@ -75,7 +75,16 @@ if ($script:IsInteractiveConsole) {
             Set-PSReadLineKeyHandler -Key UpArrow    -Function HistorySearchBackward
             Set-PSReadLineKeyHandler -Key DownArrow  -Function HistorySearchForward
             Set-PSReadLineKeyHandler -Key Tab        -Function MenuComplete
-            Set-PSReadLineKeyHandler -Key RightArrow -Function ForwardWord
+
+            # RightArrow must stay ForwardChar (the default). Binding it to
+            # ForwardWord swallows the whole next word of the inline prediction
+            # in one press, which is indistinguishable from DownArrow pulling in
+            # the next history entry -- two keys appearing to do the same thing.
+            # ForwardChar still accepts the entire suggestion when the cursor is
+            # already at the end of the line, which is the fish behaviour we want.
+            Set-PSReadLineKeyHandler -Key RightArrow -Function ForwardChar
+            # Word-at-a-time acceptance keeps its own chord.
+            Set-PSReadLineKeyHandler -Key Ctrl+RightArrow -Function AcceptNextSuggestionWord
         } catch { }
     }
 }
