@@ -573,6 +573,70 @@ function Deploy-WindowsTerminal {
             Set-JsonProperty $d 'scrollbarState'   'hidden'
             Set-JsonProperty $d 'bellStyle'        'none'
 
+            # Caelestia's palette is warm and monochromatic, so several ANSI
+            # slots sit very close to the background and to each other
+            # (brightYellow #fff1f0 vs white #eed1d2). 'indexed' lets Terminal
+            # nudge only the 16 palette colours when a foreground would be
+            # unreadable, and leaves 24-bit colours from programs untouched.
+            Set-JsonProperty $d 'adjustIndistinguishableColors' 'indexed'
+
+            # Shell integration marks: a tick per prompt on the scrollbar, and
+            # ctrl+up/down to jump between commands. Costs nothing to render.
+            Set-JsonProperty $d 'autoMarkPrompts'      $true
+            Set-JsonProperty $d 'showMarksOnScrollbar' $true
+
+            # Unfocused panes get flatter and dimmer so the active one reads as
+            # active -- the nearest Terminal equivalent of caelestia's focus
+            # treatment. Higher opacity because a blurred *inactive* pane is
+            # just noise.
+            Set-JsonProperty $d 'unfocusedAppearance' ([pscustomobject]@{
+                opacity     = 85
+                cursorColor = '#9e8c91'   # m3outline
+            })
+
+            # Deliberately NOT set: experimental.pixelShaderPath and
+            # backgroundImage. Both are per-frame GPU work for pure decoration
+            # and measurably cost render time.
+
+            # -- global window settings ------------------------------------
+            Set-JsonProperty $json 'tabWidthMode'       'compact'
+            Set-JsonProperty $json 'useAcrylicInTabRow' $true
+            Set-JsonProperty $json 'centerOnLaunch'     $true
+            Set-JsonProperty $json 'snapToGridOnResize' $true
+            Set-JsonProperty $json 'focusFollowMouse'   $false
+
+            # -- keybindings -----------------------------------------------
+            # Merged by key chord: any existing binding for the same keys is
+            # replaced, everything else the user has set is left alone. These
+            # use the legacy `command` form, which Terminal still honours
+            # alongside the newer `id` entries already in the file.
+            $caelestiaKeys = @(
+                # jump between prompts, using the marks enabled above
+                [pscustomobject]@{ keys = 'ctrl+up';   command = [pscustomobject]@{ action = 'scrollToMark'; direction = 'previous' } }
+                [pscustomobject]@{ keys = 'ctrl+down'; command = [pscustomobject]@{ action = 'scrollToMark'; direction = 'next' } }
+                # panes
+                [pscustomobject]@{ keys = 'alt+shift+minus'; command = [pscustomobject]@{ action = 'splitPane'; split = 'down';  splitMode = 'duplicate' } }
+                [pscustomobject]@{ keys = 'alt+shift+plus';  command = [pscustomobject]@{ action = 'splitPane'; split = 'right'; splitMode = 'duplicate' } }
+                [pscustomobject]@{ keys = 'alt+left';  command = [pscustomobject]@{ action = 'moveFocus'; direction = 'left' } }
+                [pscustomobject]@{ keys = 'alt+right'; command = [pscustomobject]@{ action = 'moveFocus'; direction = 'right' } }
+                [pscustomobject]@{ keys = 'alt+up';    command = [pscustomobject]@{ action = 'moveFocus'; direction = 'up' } }
+                [pscustomobject]@{ keys = 'alt+down';  command = [pscustomobject]@{ action = 'moveFocus'; direction = 'down' } }
+                [pscustomobject]@{ keys = 'ctrl+shift+z'; command = 'togglePaneZoom' }
+                # quake-style dropdown: slides a terminal down from the top of
+                # the screen from anywhere. Requires Terminal to be running.
+                [pscustomobject]@{ keys = 'win+sc(41)'; command = [pscustomobject]@{
+                    action = 'globalSummon'; name = '_quake'
+                    dropdownDuration = 150; toggleVisibility = $true; monitor = 'toCursor' } }
+            )
+            $existing = @()
+            if ($json.PSObject.Properties.Name -contains 'keybindings' -and $json.keybindings) {
+                $mine = $caelestiaKeys.keys
+                $existing = @($json.keybindings | Where-Object {
+                    -not ($_.PSObject.Properties.Name -contains 'keys' -and $mine -contains $_.keys)
+                })
+            }
+            Set-JsonProperty $json 'keybindings' (@($existing) + $caelestiaKeys)
+
             # -- default profile -------------------------------------------
             # Windows Terminal keeps Windows PowerShell 5.1 as the default even
             # after PS7 is installed, so none of the PS7-only behaviour (predictive

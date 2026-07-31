@@ -43,6 +43,13 @@ same values inline so they stay readable and hand-editable.
 
 - **Windows Terminal** — caelestia scheme, acrylic at 65%, CaskaydiaCove NF,
   bar cursor, tinted tab row, hidden scrollbar, PowerShell 7 as default profile.
+- **Dimmed inactive panes** via `unfocusedAppearance`, so the focused pane reads
+  as focused.
+- **Prompt marks** — a tick on the scrollbar per command, <kbd>Ctrl</kbd>+<kbd>↑</kbd>/<kbd>↓</kbd> to jump between them.
+- **Quake dropdown** — <kbd>Win</kbd>+<kbd>`</kbd> slides a terminal down from the top of the screen
+  from anywhere. Needs Terminal already running.
+- **Panes** — <kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>-</kbd>/<kbd>+</kbd> to split, <kbd>Alt</kbd>+arrows to move focus,
+  <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> to zoom.
 - **Starship** — rounded Material 3 pill prompt.
 - **PowerShell profile** — fish-style inline autosuggestion, palette-matched
   syntax highlighting, history search on ↑/↓.
@@ -142,6 +149,40 @@ lines later with a baffling error.
 **Use `-ErrorAction Ignore`, not `SilentlyContinue`, in a profile.**
 `SilentlyContinue` still appends to `$Error`, so every new session opens with a
 phantom exception.
+
+---
+
+## Performance
+
+Every setting here is config-only. Two things were deliberately left out
+because they cost per-frame GPU work for pure decoration:
+`experimental.pixelShaderPath` and `backgroundImage`.
+
+Measured on this machine (minimum of 5 runs each):
+
+| | |
+|---|---|
+| `pwsh -NoProfile` baseline | 170 ms |
+| with this profile | 417 ms (was 454) |
+| starship prompt render | ~86 ms per prompt |
+
+What the profile does about it: PSReadLine is taken from the module the host has
+already loaded instead of calling `Get-Module -ListAvailable` (~40 ms) and
+re-importing it (~80 ms), and `starship init` output is cached to
+`%LOCALAPPDATA%\caelestia\starship-init.ps1` and regenerated only when
+`starship.exe` is newer.
+
+Two honest limits on that:
+
+The init cache saves less than it looks like it should. Spawning `starship.exe`
+is only ~38 ms of the ~240 ms; the rest is *executing* the init script, which
+builds a dynamic module, and caching the text does not avoid that.
+
+The ~86 ms per prompt is starship's process-spawn cost, not configuration. An
+empty `starship.toml` measures 85 ms against this repo's 86 ms — the whole
+caelestia config is worth 1 ms. Trimming modules would buy nothing. If you want
+that 86 ms back the only real option is dropping starship for a hand-written
+PowerShell `prompt` function, which costs you git status and language versions.
 
 ---
 

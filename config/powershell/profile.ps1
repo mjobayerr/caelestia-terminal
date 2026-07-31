@@ -34,13 +34,19 @@ function Resolve-Tool {
 if ($script:IsInteractiveConsole) {
     # Predictive IntelliSense is the closest thing to fish autosuggest. It needs
     # PSReadLine 2.2+, which ships with PS7 but NOT with Windows PowerShell 5.1.
-    $psrl = Get-Module PSReadLine -ListAvailable |
-        Sort-Object Version -Descending |
-        Select-Object -First 1
+    #
+    # Use the module the host has ALREADY loaded. `Get-Module -ListAvailable`
+    # walks every directory on $env:PSModulePath and costs ~40ms per session,
+    # and a redundant Import-Module costs ~80ms more -- both pure waste in PS7,
+    # where the console host loads PSReadLine before the profile even runs.
+    $psrl = Get-Module PSReadLine
+    if (-not $psrl) {
+        Import-Module PSReadLine -ErrorAction Ignore
+        $psrl = Get-Module PSReadLine
+    }
 
     try {
         if ($psrl -and $psrl.Version -ge [version]'2.2.0') {
-            Import-Module PSReadLine -MinimumVersion 2.2.0 -ErrorAction Stop
             Set-PSReadLineOption -PredictionSource HistoryAndPlugin
             Set-PSReadLineOption -PredictionViewStyle ListView
         }
@@ -97,10 +103,27 @@ $starship = Resolve-Tool -Name 'starship' -Candidates @(
 if ($starship) {
     $cfg = Join-Path $env:USERPROFILE '.config\starship.toml'
     if (Test-Path $cfg) { $env:STARSHIP_CONFIG = $cfg }
+
+    # `starship init powershell` spawns starship.exe and costs ~240ms -- by far
+    # the most expensive thing in this profile, paid on every single new tab.
+    # Its output only changes when starship itself is upgraded, so cache it and
+    # dot-source the cache instead. Re-generated automatically when the binary
+    # is newer than the cache.
+    $cacheDir  = Join-Path $env:LOCALAPPDATA 'caelestia'
+    $cacheFile = Join-Path $cacheDir 'starship-init.ps1'
     try {
-        Invoke-Expression (& $starship init powershell)
+        $stale = -not (Test-Path $cacheFile) -or
+                 (Get-Item $starship).LastWriteTime -gt (Get-Item $cacheFile).LastWriteTime
+        if ($stale) {
+            if (-not (Test-Path $cacheDir)) { New-Item -ItemType Directory -Path $cacheDir -Force | Out-Null }
+            & $starship init powershell --print-full-init | Set-Content $cacheFile -Encoding UTF8
+        }
+        . $cacheFile
     } catch {
-        Write-Warning "starship init failed: $($_.Exception.Message)"
+        # Cache unusable (first run, read-only disk, upgrade mid-write): fall
+        # back to the slow path rather than losing the prompt entirely.
+        try { Invoke-Expression (& $starship init powershell) }
+        catch { Write-Warning "starship init failed: $($_.Exception.Message)" }
     }
 }
 
