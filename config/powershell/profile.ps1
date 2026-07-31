@@ -60,21 +60,31 @@ if ($script:IsInteractiveConsole) {
             Set-PSReadLineOption -HistoryNoDuplicates
             Set-PSReadLineOption -HistorySearchCursorMovesToEnd
 
-            # Caelestia palette applied to syntax highlighting.
-            Set-PSReadLineOption -Colors @{
-                Command          = '#ffb0ca'  # m3primary
-                Parameter        = '#e2bdc7'  # m3secondary
-                Operator         = '#f0bc95'  # m3tertiary
-                Variable         = '#ffd1c0'  # term14
-                String           = '#ffbbb7'  # term2
-                Number           = '#b3a2d5'  # term4
-                Type             = '#f9a8c2'  # term13
-                Comment          = '#9e8c91'  # m3outline
-                Keyword          = '#e98fb0'  # term5
-                Error            = '#ffb4ab'  # m3error
-                InlinePrediction = '#6f5b5f'
-                ListPrediction   = '#9e8c91'
-                Selection        = "$([char]27)[48;2;111;51;74m"
+            # Syntax colours come from the active scheme, written out by
+            # install.ps1 so this file does not have to hardcode a palette.
+            $colorFile = Join-Path $env:LOCALAPPDATA 'caelestia\colors.psd1'
+            if (Test-Path $colorFile) {
+                $c = Import-PowerShellDataFile $colorFile
+                $sel = $c.SelectionRgb.TrimStart('#')
+                Set-PSReadLineOption -Colors @{
+                    Command          = $c.Command
+                    Parameter        = $c.Parameter
+                    Operator         = $c.Operator
+                    Variable         = $c.Variable
+                    String           = $c.String
+                    Number           = $c.Number
+                    Type             = $c.Type
+                    Comment          = $c.Comment
+                    Keyword          = $c.Keyword
+                    Error            = $c.Error
+                    InlinePrediction = $c.InlinePrediction
+                    ListPrediction   = $c.ListPrediction
+                    # Selection takes a raw SGR sequence, not a hex string.
+                    Selection = "$([char]27)[48;2;{0};{1};{2}m" -f
+                        [Convert]::ToInt32($sel.Substring(0,2),16),
+                        [Convert]::ToInt32($sel.Substring(2,2),16),
+                        [Convert]::ToInt32($sel.Substring(4,2),16)
+                }
             }
 
             # Up/Down search history by what is already typed.

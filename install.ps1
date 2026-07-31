@@ -51,8 +51,44 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$Root  = Split-Path -Parent $MyInvocation.MyCommand.Path
-$Theme = Import-PowerShellDataFile (Join-Path $Root 'theme\caelestia.psd1')
+$Root      = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ThemeFile = Import-PowerShellDataFile (Join-Path $Root 'theme\caelestia.psd1')
+
+# Resolve the active scheme up front and fail loudly on a typo or a missing key,
+# rather than writing a half-styled settings.json and leaving it to be noticed
+# by eye later.
+$ActivePaletteName = $ThemeFile.Active
+if (-not $ThemeFile.Schemes.ContainsKey($ActivePaletteName)) {
+    throw "theme\caelestia.psd1: Active = '$ActivePaletteName' but no such scheme. Available: $($ThemeFile.Schemes.Keys -join ', ')"
+}
+$ActivePalette = $ThemeFile.Schemes[$ActivePaletteName]
+
+$RequiredKeys = @(
+    'Background','Foreground','Cursor','SelectionBackground'
+    'Black','Red','Green','Yellow','Blue','Purple','Cyan','White'
+    'BrightBlack','BrightRed','BrightGreen','BrightYellow'
+    'BrightBlue','BrightPurple','BrightCyan','BrightWhite'
+    'TabBackground','TabRowBackground','TabRowUnfocused'
+    'PromptPrimary','PromptOnPrimary','PromptContainer','PromptOnContainer'
+    'PromptSecondary','PromptTertiary','PromptError','PromptSuccess'
+    'PromptSurface','PromptSurfaceHigh','PromptOutline'
+)
+$missingKeys = @($RequiredKeys | Where-Object { -not $ActivePalette.ContainsKey($_) })
+if ($missingKeys) {
+    throw "scheme '$ActivePaletteName' is missing: $($missingKeys -join ', ')"
+}
+$badHex = @($RequiredKeys | Where-Object { $ActivePalette[$_] -notmatch '^#[0-9a-fA-F]{6}$' })
+if ($badHex) {
+    throw "scheme '$ActivePaletteName' has non-#rrggbb values: $($badHex -join ', ')"
+}
+
+# Kept so the rest of the script can read font/opacity the way it always has.
+$Theme = @{
+    Name     = 'Caelestia'
+    FontFace = $ThemeFile.FontFace
+    FontSize = $ThemeFile.FontSize
+    Opacity  = $ThemeFile.Opacity
+}
 
 $NerdFontVersion = 'v3.4.0'
 # The family the patched Cascadia actually reports to GDI is 'CaskaydiaCove NF'.
@@ -586,18 +622,18 @@ function Deploy-WindowsTerminal {
             # -- colour scheme ---------------------------------------------
             $scheme = [ordered]@{
                 name                = $Theme.Name
-                background          = $Theme.Background
-                foreground          = $Theme.Foreground
-                cursorColor         = $Theme.Cursor
-                selectionBackground = $Theme.SelectionBackground
-                black        = $Theme.Black;        red          = $Theme.Red
-                green        = $Theme.Green;        yellow       = $Theme.Yellow
-                blue         = $Theme.Blue;         purple       = $Theme.Purple
-                cyan         = $Theme.Cyan;         white        = $Theme.White
-                brightBlack  = $Theme.BrightBlack;  brightRed    = $Theme.BrightRed
-                brightGreen  = $Theme.BrightGreen;  brightYellow = $Theme.BrightYellow
-                brightBlue   = $Theme.BrightBlue;   brightPurple = $Theme.BrightPurple
-                brightCyan   = $Theme.BrightCyan;   brightWhite  = $Theme.BrightWhite
+                background          = $ActivePalette.Background
+                foreground          = $ActivePalette.Foreground
+                cursorColor         = $ActivePalette.Cursor
+                selectionBackground = $ActivePalette.SelectionBackground
+                black        = $ActivePalette.Black;        red          = $ActivePalette.Red
+                green        = $ActivePalette.Green;        yellow       = $ActivePalette.Yellow
+                blue         = $ActivePalette.Blue;         purple       = $ActivePalette.Purple
+                cyan         = $ActivePalette.Cyan;         white        = $ActivePalette.White
+                brightBlack  = $ActivePalette.BrightBlack;  brightRed    = $ActivePalette.BrightRed
+                brightGreen  = $ActivePalette.BrightGreen;  brightYellow = $ActivePalette.BrightYellow
+                brightBlue   = $ActivePalette.BrightBlue;   brightPurple = $ActivePalette.BrightPurple
+                brightCyan   = $ActivePalette.BrightCyan;   brightWhite  = $ActivePalette.BrightWhite
             }
             $schemes = @()
             if ($json.PSObject.Properties.Name -contains 'schemes' -and $json.schemes) {
@@ -608,10 +644,11 @@ function Deploy-WindowsTerminal {
             # -- window theme ----------------------------------------------
             $wtTheme = [pscustomobject]@{
                 name   = 'caelestia'
-                tab    = [pscustomobject]@{ background = '#261d20FF' }
+                # Terminal wants #rrggbbaa here, so the scheme's #rrggbb gains FF.
+                tab    = [pscustomobject]@{ background = "$($ActivePalette.TabBackground)FF" }
                 tabRow = [pscustomobject]@{
-                    background          = '#130c0eFF'
-                    unfocusedBackground = '#191114FF'
+                    background          = "$($ActivePalette.TabRowBackground)FF"
+                    unfocusedBackground = "$($ActivePalette.TabRowUnfocused)FF"
                 }
                 window = [pscustomobject]@{ applicationTheme = 'dark' }
             }
@@ -665,7 +702,7 @@ function Deploy-WindowsTerminal {
             # just noise.
             Set-JsonProperty $d 'unfocusedAppearance' ([pscustomobject]@{
                 opacity     = 85
-                cursorColor = '#9e8c91'   # m3outline
+                cursorColor = $ActivePalette.PromptOutline
             })
 
             # Deliberately NOT set: experimental.pixelShaderPath and
@@ -773,11 +810,43 @@ function Deploy-Starship {
     if (-not $PSCmdlet.ShouldProcess($dest, 'write starship.toml')) { return }
 
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
+
+    # The prompt palette is generated from the active scheme rather than copied,
+    # so switching Active in the psd1 restyles the prompt too instead of leaving
+    # it on the previous scheme's colours.
+    $toml = [IO.File]::ReadAllText($src)
+    $palette = @"
+[palettes.caelestia]
+m3_primary              = "$($ActivePalette.PromptPrimary)"
+m3_on_primary           = "$($ActivePalette.PromptOnPrimary)"
+m3_primary_container    = "$($ActivePalette.PromptContainer)"
+m3_on_primary_container = "$($ActivePalette.PromptOnContainer)"
+m3_secondary            = "$($ActivePalette.PromptSecondary)"
+m3_tertiary             = "$($ActivePalette.PromptTertiary)"
+m3_on_tertiary          = "$($ActivePalette.PromptOnPrimary)"
+m3_error                = "$($ActivePalette.PromptError)"
+m3_success              = "$($ActivePalette.PromptSuccess)"
+m3_surface              = "$($ActivePalette.PromptSurface)"
+m3_surface_low          = "$($ActivePalette.TabRowUnfocused)"
+m3_surface_container    = "$($ActivePalette.TabBackground)"
+m3_surface_high         = "$($ActivePalette.PromptSurfaceHigh)"
+m3_on_surface           = "$($ActivePalette.Foreground)"
+m3_outline              = "$($ActivePalette.PromptOutline)"
+
+"@
+    # Replace the whole palette table, up to the next table header.
+    $pattern = '(?ms)^\[palettes\.caelestia\]\r?\n.*?(?=^\[)'
+    if ($toml -notmatch $pattern) {
+        throw 'starship.toml: [palettes.caelestia] table not found; cannot inject scheme'
+    }
+    $toml = [regex]::Replace($toml, $pattern, { $palette })
+
     $changed = $false
-    if (-not ((Test-Path $dest) -and ((Get-FileHash $src).Hash -eq (Get-FileHash $dest).Hash))) {
+    $current = if (Test-Path $dest) { [IO.File]::ReadAllText($dest) } else { '' }
+    if ($current -ne $toml) {
         Backup-File $dest
-        Copy-Item $src $dest -Force
-        Write-Ok "-> $dest"
+        [IO.File]::WriteAllText($dest, $toml, (New-Object Text.UTF8Encoding $false))
+        Write-Ok "-> $dest  (palette: $ActivePaletteName)"
         $changed = $true
     } else {
         Write-Ok 'already current'
@@ -792,8 +861,40 @@ function Deploy-Starship {
 }
 
 # ================================================================= profile
+function Write-SchemeColors {
+    # PSReadLine's syntax colours live in a .ps1 that is copied verbatim, so they
+    # cannot be templated the way starship.toml is. Emit them as data instead and
+    # let the profile read it, keeping the scheme the single source of truth.
+    $dir  = Join-Path $env:LOCALAPPDATA 'caelestia'
+    $dest = Join-Path $dir 'colors.psd1'
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+
+    $body = @"
+# GENERATED by install.ps1 from theme\caelestia.psd1 (scheme: $ActivePaletteName).
+# Edits here are overwritten on the next run -- change the scheme instead.
+@{
+    Command          = '$($ActivePalette.PromptPrimary)'
+    Parameter        = '$($ActivePalette.PromptSecondary)'
+    Operator         = '$($ActivePalette.PromptTertiary)'
+    Variable         = '$($ActivePalette.BrightCyan)'
+    String           = '$($ActivePalette.Green)'
+    Number           = '$($ActivePalette.BrightPurple)'
+    Type             = '$($ActivePalette.Cyan)'
+    Comment          = '$($ActivePalette.PromptOutline)'
+    Keyword          = '$($ActivePalette.Purple)'
+    Error            = '$($ActivePalette.PromptError)'
+    InlinePrediction = '$($ActivePalette.BrightBlack)'
+    ListPrediction   = '$($ActivePalette.PromptOutline)'
+    SelectionRgb     = '$($ActivePalette.SelectionBackground)'
+}
+"@
+    [IO.File]::WriteAllText($dest, $body, (New-Object Text.UTF8Encoding $false))
+    Write-Ok "-> $dest  (scheme: $ActivePaletteName)"
+}
+
 function Deploy-Profile {
     Write-Step 'PowerShell profile'
+    Write-SchemeColors
     $src = Join-Path $Root 'config\powershell\profile.ps1'
 
     $targets = @(

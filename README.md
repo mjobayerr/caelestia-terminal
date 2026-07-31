@@ -41,8 +41,8 @@ same values inline so they stay readable and hand-editable.
 
 ## What you get
 
-- **Windows Terminal** — caelestia scheme, acrylic at 65%, CaskaydiaCove NF,
-  bar cursor, tinted tab row, hidden scrollbar, PowerShell 7 as default profile.
+- **Windows Terminal** — `overdrive` scheme, acrylic at 55%, CaskaydiaCove NF,
+  neon cursor, tinted tab row, hidden scrollbar, PowerShell 7 as default profile.
 - **Dimmed inactive panes** via `unfocusedAppearance`, so the focused pane reads
   as focused.
 - **Prompt marks** — a tick on the scrollbar per command, <kbd>Ctrl</kbd>+<kbd>↑</kbd>/<kbd>↓</kbd> to jump between them.
@@ -165,6 +165,43 @@ lines later with a baffling error.
 **Use `-ErrorAction Ignore`, not `SilentlyContinue`, in a profile.**
 `SilentlyContinue` still appends to `$Error`, so every new session opens with a
 phantom exception.
+
+---
+
+## Colour schemes
+
+`theme/caelestia.psd1` holds every scheme and one `Active` line selecting which
+is used. It is the single source of truth for **three** consumers — Windows
+Terminal, the starship prompt palette, and PSReadLine syntax colours — so
+changing that one word restyles all of them on the next run:
+
+```powershell
+Active = 'overdrive'     # or 'caelestia' / 'caelestia-faithful'
+.\install.ps1 -Only Terminal,Starship,Profile
+```
+
+| Scheme | What it is |
+|---|---|
+| `overdrive` | **Default.** High-contrast dark, cyberpunk/anime. Cool near-black base, saturated primaries, neon orange cursor. |
+| `caelestia` | Upstream's scheme with its four unusable ANSI slots repaired. |
+| `caelestia-faithful` | `term0`..`term15` exactly as upstream ships them. |
+
+**Why `caelestia-faithful` is not the default.** Upstream derives its palette
+from a pink wallpaper, so six of the eight hues land in one pink-to-peach band.
+It is cohesive but carries almost no information: `green` (`#ffbbb7`) is pink and
+reads the same as `yellow`; `yellow` (`#ffdedf`) and `brightYellow` (`#fff1f0`)
+sit within a few percent of the foreground, so warnings do not look like
+warnings; `brightBlue` (`#dcbc93`) is tan and collides with `cyan` (`#ffba93`).
+A git diff is close to unreadable.
+
+The `caelestia` scheme fixes that using upstream's *own* Material 3 roles where
+they exist — `Green` becomes `m3success`, `Yellow` becomes `m3tertiary`. Only
+`Cyan` and `BrightBlue` are genuinely invented, because upstream has no cool
+accent to borrow.
+
+Adding a scheme means copying a block and keeping every key. The installer
+validates that a scheme defines all of them, and that each is `#rrggbb`, before
+writing anything.
 
 ---
 
