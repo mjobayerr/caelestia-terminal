@@ -43,5 +43,11 @@
     # resolves this against the installed families and falls back if missing.
     FontFace   = 'CaskaydiaCove NF'
     FontSize   = 12
-    Opacity    = 0.85
+
+    # Upstream's transparency.base is 0.85, but upstream also ships
+    # transparency.enabled = false. At 0.85 over a dark desktop, Windows acrylic
+    # is visually indistinguishable from opaque. 0.75 makes the blur actually
+    # read as blur. This is the one deliberate deviation from upstream values.
+    # Raise back to 0.85 for exact parity, or drop toward 0.6 for more.
+    Opacity    = 0.75
 }

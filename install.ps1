@@ -41,7 +41,11 @@ param(
 
     [switch]$SkipPackages,
     [switch]$Yes,
-    [switch]$NoElevate
+    [switch]$NoElevate,
+
+    # Leave Windows Terminal's defaultProfile alone instead of switching it to
+    # PowerShell 7.
+    [switch]$KeepDefaultProfile
 )
 
 $ErrorActionPreference = 'Stop'
@@ -516,6 +520,26 @@ function Deploy-WindowsTerminal {
             Set-JsonProperty $d 'antialiasingMode' 'grayscale'
             Set-JsonProperty $d 'scrollbarState'   'hidden'
             Set-JsonProperty $d 'bellStyle'        'none'
+
+            # -- default profile -------------------------------------------
+            # Windows Terminal keeps Windows PowerShell 5.1 as the default even
+            # after PS7 is installed, so none of the PS7-only behaviour (predictive
+            # IntelliSense, faster startup) is ever seen. Point it at PowerShell 7
+            # when Terminal has generated a profile for it. -KeepDefaultProfile
+            # opts out.
+            if (-not $KeepDefaultProfile) {
+                $ps7 = $json.profiles.list | Where-Object {
+                    $_.PSObject.Properties.Name -contains 'source' -and
+                    $_.source -eq 'Windows.Terminal.PowershellCore'
+                } | Select-Object -First 1
+
+                if ($ps7 -and $json.defaultProfile -ne $ps7.guid) {
+                    Set-JsonProperty $json 'defaultProfile' $ps7.guid
+                    Write-Ok "default profile -> $($ps7.name) (PowerShell 7)"
+                } elseif (-not $ps7) {
+                    Write-Warn2 'no PowerShell 7 profile found; leaving default as-is'
+                }
+            }
 
             $after = $json | ConvertTo-Json -Depth 32
             if ($before -eq $after) {
