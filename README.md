@@ -33,9 +33,9 @@ Every value is extracted from upstream source, not eyeballed:
 | Font family + size | `plugin/src/Caelestia/Config/appearanceconfig.hpp` |
 | Opacity | same file → `transparency.base` (see deviation below) |
 
-`theme/caelestia.psd1` is the single source of truth for the Windows Terminal
-side. `config/starship/starship.toml` carries the
-same values inline so they stay readable and hand-editable.
+`config.psd1` is the single source of truth. The starship palette and the
+PSReadLine syntax colours are both *generated* from it at install time, so the
+scheme cannot drift out of sync between the three.
 
 ---
 
@@ -72,8 +72,8 @@ Opacity needs to be *low* for the blur to read at all. Measured on Windows 11:
 at `0.85` (upstream's `transparency.base`) and `0.75`, acrylic is
 indistinguishable from opaque against a dark background — the blur is applied,
 it just looks flat. It only becomes legible around `0.6`. This repo ships
-`0.65`, the one deliberate deviation from upstream values. Upstream also ships
-`transparency.enabled = false`, so there is no "correct" value to match here.
+`0.55`. Upstream also ships `transparency.enabled = false`, so there is no
+"correct" value to match here. `Window.Opacity` in `config.psd1`.
 
 **No custom corner radius or colored border.** You get Windows 11's default
 rounding. Caelestia's thick rounded corners and accent borders are compositor
@@ -168,9 +168,59 @@ phantom exception.
 
 ---
 
+## Configuration
+
+Everything lives in [`config.psd1`](config.psd1) — colours, font, opacity,
+window chrome, keybindings, shell toggles. Nothing is hardcoded in the
+installer. Edit, then:
+
+```powershell
+.\install.ps1 -SkipPackages
+```
+
+Any key you delete falls back to the `$Defaults` table in `install.ps1`, so a
+trimmed-down config file is still valid.
+
+| Section | Covers |
+|---|---|
+| `Active` | Which scheme in `Schemes` to use |
+| `Window` | Opacity, acrylic, padding, top bar, launch mode |
+| `Terminal` | Cursor, antialiasing, scrollbar, bell, scrollback, prompt marks |
+| `Keybindings` | Every chord. `$null` on any one leaves that chord alone |
+| `Font` | Face, size, weight, ligatures |
+| `Shell` | Starship, fastfetch, predictions, history search, conda prompt |
+| `NerdFont` | Which Nerd Font to fetch when missing |
+| `Schemes` | The palettes themselves |
+
+---
+
+## Minimising the top bar
+
+Four levels, smallest last:
+
+| `Window` setting | Effect |
+|---|---|
+| `ShowTabsInTitlebar = $true` | Tabs live *in* the title bar — one row instead of two. |
+| `AlwaysShowTabs = $false` | Tab strip disappears entirely while only one tab is open. |
+| `ShowTitleInTitlebar = $false` | Drops the window title text, leaving the bar emptier. |
+| `LaunchMode = 'focus'` | **No title bar and no tabs at all.** |
+
+The first three are the defaults, so out of the box you get a single thin bar
+that vanishes down to just window controls with one tab open.
+
+For the last one you do not have to commit — `Keybindings.ToggleFocusMode`
+(<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd>) toggles all chrome off and on at
+runtime. Set `LaunchMode = 'focus'` only if you want to start that way.
+
+Note that with no tab bar, <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> and the
+command palette (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>P</kbd>) become your only
+way to reach other tabs.
+
+---
+
 ## Colour schemes
 
-`theme/caelestia.psd1` holds every scheme and one `Active` line selecting which
+`config.psd1` holds every scheme and one `Active` line selecting which
 is used. It is the single source of truth for **three** consumers — Windows
 Terminal, the starship prompt palette, and PSReadLine syntax colours — so
 changing that one word restyles all of them on the next run:
@@ -248,7 +298,7 @@ cargo install matugen
 matugen image "C:\path\to\wallpaper.jpg" --json hex
 ```
 
-Map the output into `theme/caelestia.psd1` (`primary` → `Cursor`, `surface` →
+Map the output into `config.psd1` (`primary` → `Cursor`, `surface` →
 `Background`, `onSurface` → `Foreground`) and re-run `.\install.ps1 -Only Terminal`.
 
 The ANSI 0–15 slots are caelestia's own derivation, not standard Material You
@@ -283,7 +333,7 @@ To roll back, restore the newest `.bak` in
 
 ```
 install.ps1                      idempotent installer
-theme/caelestia.psd1             palette, single source of truth
+config.psd1             palette, single source of truth
 config/starship/starship.toml    -> ~/.config/starship.toml
 config/powershell/profile.ps1    -> both PS 5.1 and PS 7 profiles
 caelestia-shell/                 upstream clone, reference only (gitignored)

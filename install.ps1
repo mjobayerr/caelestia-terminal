@@ -51,15 +51,81 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$Root      = Split-Path -Parent $MyInvocation.MyCommand.Path
-$ThemeFile = Import-PowerShellDataFile (Join-Path $Root 'theme\caelestia.psd1')
+$Root = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+# Defaults for every setting. The config file is merged over this, so deleting
+# a key from config.psd1 falls back here instead of erroring or writing $null.
+$Defaults = @{
+    Active = 'overdrive'
+    Window = @{
+        Opacity = 0.55; Acrylic = $true; Padding = '16,12,16,12'
+        ShowTabsInTitlebar = $true; AlwaysShowTabs = $false
+        ShowTitleInTitlebar = $false; TabWidthMode = 'compact'
+        AcrylicInTabRow = $true; LaunchMode = 'default'
+        CenterOnLaunch = $true; SnapToGridOnResize = $true
+        FocusFollowMouse = $false; UnfocusedOpacity = 85
+    }
+    Terminal = @{
+        CursorShape = 'bar'; AntialiasingMode = 'grayscale'
+        ScrollbarState = 'hidden'; BellStyle = 'none'; ScrollbackLines = 10000
+        AdjustIndistinguishableColors = 'indexed'
+        AutoMarkPrompts = $true; ShowMarksOnScrollbar = $true
+        UsePowerShell7AsDefault = $true
+    }
+    Keybindings = @{
+        Enabled = $true
+        ScrollToPreviousMark = 'ctrl+up'; ScrollToNextMark = 'ctrl+down'
+        SplitDown = 'alt+shift+minus'; SplitRight = 'alt+shift+plus'
+        FocusLeft = 'alt+left'; FocusRight = 'alt+right'
+        FocusUp = 'alt+up'; FocusDown = 'alt+down'
+        ZoomPane = 'ctrl+shift+z'; ToggleFocusMode = 'alt+shift+f'
+        QuakeSummon = 'win+sc(41)'; QuakeDropdownMs = 150; QuakeMonitor = 'toMouse'
+    }
+    Font  = @{ Face = 'CaskaydiaCove NF'; Size = 12; Weight = 'normal'; Ligatures = $true }
+    Shell = @{
+        Starship = $true; Fastfetch = $true; Predictions = $true
+        HistorySearchOnArrows = $true; DisableCondaPrompt = $true
+    }
+    NerdFont = @{
+        Version = 'v3.4.0'; Archive = 'CascadiaCode.zip'
+        FilePrefix = 'CaskaydiaCoveNerdFont'; Family = 'CaskaydiaCove NF'
+        Styles = @('Regular', 'Bold', 'Italic', 'BoldItalic')
+    }
+}
+
+function Merge-Config {
+    # One level of nesting is all the config has, so a shallow per-section
+    # merge is enough. User values win; anything absent falls back.
+    param([hashtable]$Base, [hashtable]$Override)
+    $out = @{}
+    foreach ($k in $Base.PSBase.Keys) {
+        if ($Base[$k] -is [hashtable] -and $Override.ContainsKey($k) -and $Override[$k] -is [hashtable]) {
+            $section = $Base[$k].Clone()
+            foreach ($sk in $Override[$k].PSBase.Keys) { $section[$sk] = $Override[$k][$sk] }
+            $out[$k] = $section
+        } elseif ($Override.ContainsKey($k)) {
+            $out[$k] = $Override[$k]
+        } else {
+            $out[$k] = $Base[$k]
+        }
+    }
+    # Sections present only in the user's file (e.g. Schemes).
+    foreach ($k in $Override.PSBase.Keys) { if (-not $out.ContainsKey($k)) { $out[$k] = $Override[$k] } }
+    return $out
+}
+
+$ConfigPath = Join-Path $Root 'config.psd1'
+if (-not (Test-Path $ConfigPath)) { throw "config.psd1 not found at $ConfigPath" }
+$ThemeFile = Merge-Config -Base $Defaults -Override (Import-PowerShellDataFile $ConfigPath)
+
+$Cfg = $ThemeFile   # shorthand used throughout
 
 # Resolve the active scheme up front and fail loudly on a typo or a missing key,
 # rather than writing a half-styled settings.json and leaving it to be noticed
 # by eye later.
 $ActivePaletteName = $ThemeFile.Active
 if (-not $ThemeFile.Schemes.ContainsKey($ActivePaletteName)) {
-    throw "theme\caelestia.psd1: Active = '$ActivePaletteName' but no such scheme. Available: $($ThemeFile.Schemes.Keys -join ', ')"
+    throw "config.psd1: Active = '$ActivePaletteName' but no such scheme. Available: $($ThemeFile.Schemes.PSBase.Keys -join ', ')"
 }
 $ActivePalette = $ThemeFile.Schemes[$ActivePaletteName]
 
@@ -82,22 +148,22 @@ if ($badHex) {
     throw "scheme '$ActivePaletteName' has non-#rrggbb values: $($badHex -join ', ')"
 }
 
-# Kept so the rest of the script can read font/opacity the way it always has.
 $Theme = @{
     Name     = 'Caelestia'
-    FontFace = $ThemeFile.FontFace
-    FontSize = $ThemeFile.FontSize
-    Opacity  = $ThemeFile.Opacity
+    FontFace = $Cfg.Font.Face
+    FontSize = $Cfg.Font.Size
+    Opacity  = $Cfg.Window.Opacity
 }
 
-$NerdFontVersion = 'v3.4.0'
-# The family the patched Cascadia actually reports to GDI is 'CaskaydiaCove NF'.
-# The files are named CaskaydiaCoveNerdFont-*.ttf, which is NOT the family name.
-# Using the filename spelling here makes every detection miss, so the font
+# NerdFont.Family is the family the patched Cascadia reports to GDI
+# ('CaskaydiaCove NF'). NerdFont.FilePrefix is the TTF filename stem
+# ('CaskaydiaCoveNerdFont-*.ttf'), which is NOT the family name -- using the
+# filename spelling as the family makes every detection miss, so the font
 # re-downloads on every run and configs fall back to another family.
-$NerdFontFamily  = 'CaskaydiaCove NF'
-$FontFilePrefix  = 'CaskaydiaCoveNerdFont'
-$FontStyles      = @('Regular', 'Bold', 'Italic', 'BoldItalic')
+$NerdFontVersion = $Cfg.NerdFont.Version
+$NerdFontFamily  = $Cfg.NerdFont.Family
+$FontFilePrefix  = $Cfg.NerdFont.FilePrefix
+$FontStyles      = $Cfg.NerdFont.Styles
 
 # Work that needs admin, collected across stages and flushed in one elevated
 # child process so the run costs at most a single UAC prompt.
@@ -435,7 +501,7 @@ function Install-NerdFont {
 
     Remove-PerUserFontInstall -FilePrefix $FontFilePrefix
 
-    $url = "https://github.com/ryanoasis/nerd-fonts/releases/download/$NerdFontVersion/CascadiaCode.zip"
+    $url = "https://github.com/ryanoasis/nerd-fonts/releases/download/$NerdFontVersion/$($Cfg.NerdFont.Archive)"
     $tmp = Join-Path ([IO.Path]::GetTempPath()) "caelestia-font-$(Get-Random)"
     $zip = "$tmp.zip"
 
@@ -529,6 +595,7 @@ function Test-TerminalSettings {
         'profiles.defaults.bellStyle'        = @('audible','window','taskbar','all','none')
         'profiles.defaults.adjustIndistinguishableColors' = @('never','indexed','always')
         'tabWidthMode'                       = @('equal','titleLength','compact')
+        'launchMode'                         = @('default','maximized','focus','fullscreen','maximizedFocus')
     }
     $actionEnums = @{
         'globalSummon.monitor'   = @('any','toCurrent','toMouse')
@@ -668,40 +735,37 @@ function Deploy-WindowsTerminal {
             }
             $d = $json.profiles.defaults
 
+            $lig = if ($Cfg.Font.Ligatures) { 1 } else { 0 }
             Set-JsonProperty $d 'colorScheme' $Theme.Name
             Set-JsonProperty $d 'font' ([pscustomobject]@{
                 face     = $face
-                size     = $Theme.FontSize
-                weight   = 'normal'
-                features = [pscustomobject]@{ calt = 1; liga = 1 }
+                size     = $Cfg.Font.Size
+                weight   = $Cfg.Font.Weight
+                features = [pscustomobject]@{ calt = $lig; liga = $lig }
             })
             # Acrylic is the only blur Windows exposes; radius is not tunable.
-            Set-JsonProperty $d 'useAcrylic'       $true
-            Set-JsonProperty $d 'opacity'          ([int]($Theme.Opacity * 100))
-            Set-JsonProperty $d 'padding'          '16,12,16,12'
-            Set-JsonProperty $d 'cursorShape'      'bar'
-            Set-JsonProperty $d 'antialiasingMode' 'grayscale'
-            Set-JsonProperty $d 'scrollbarState'   'hidden'
-            Set-JsonProperty $d 'bellStyle'        'none'
+            Set-JsonProperty $d 'useAcrylic'       ([bool]$Cfg.Window.Acrylic)
+            Set-JsonProperty $d 'opacity'          ([int]($Cfg.Window.Opacity * 100))
+            Set-JsonProperty $d 'padding'          $Cfg.Window.Padding
+            Set-JsonProperty $d 'cursorShape'      $Cfg.Terminal.CursorShape
+            Set-JsonProperty $d 'antialiasingMode' $Cfg.Terminal.AntialiasingMode
+            Set-JsonProperty $d 'scrollbarState'   $Cfg.Terminal.ScrollbarState
+            Set-JsonProperty $d 'bellStyle'        $Cfg.Terminal.BellStyle
+            Set-JsonProperty $d 'historySize'      ([int]$Cfg.Terminal.ScrollbackLines)
 
-            # Caelestia's palette is warm and monochromatic, so several ANSI
-            # slots sit very close to the background and to each other
-            # (brightYellow #fff1f0 vs white #eed1d2). 'indexed' lets Terminal
-            # nudge only the 16 palette colours when a foreground would be
-            # unreadable, and leaves 24-bit colours from programs untouched.
-            Set-JsonProperty $d 'adjustIndistinguishableColors' 'indexed'
+            # Nudges palette colours that would be unreadable against the
+            # background. 'indexed' touches only the 16 ANSI slots and leaves
+            # 24-bit colour from programs alone.
+            Set-JsonProperty $d 'adjustIndistinguishableColors' $Cfg.Terminal.AdjustIndistinguishableColors
 
             # Shell integration marks: a tick per prompt on the scrollbar, and
             # ctrl+up/down to jump between commands. Costs nothing to render.
-            Set-JsonProperty $d 'autoMarkPrompts'      $true
-            Set-JsonProperty $d 'showMarksOnScrollbar' $true
+            Set-JsonProperty $d 'autoMarkPrompts'      ([bool]$Cfg.Terminal.AutoMarkPrompts)
+            Set-JsonProperty $d 'showMarksOnScrollbar' ([bool]$Cfg.Terminal.ShowMarksOnScrollbar)
 
-            # Unfocused panes get flatter and dimmer so the active one reads as
-            # active -- the nearest Terminal equivalent of caelestia's focus
-            # treatment. Higher opacity because a blurred *inactive* pane is
-            # just noise.
+            # Inactive panes flatten and dim so the focused one reads as focused.
             Set-JsonProperty $d 'unfocusedAppearance' ([pscustomobject]@{
-                opacity     = 85
+                opacity     = [int]$Cfg.Window.UnfocusedOpacity
                 cursorColor = $ActivePalette.PromptOutline
             })
 
@@ -710,46 +774,58 @@ function Deploy-WindowsTerminal {
             # and measurably cost render time.
 
             # -- global window settings ------------------------------------
-            Set-JsonProperty $json 'tabWidthMode'       'compact'
-            Set-JsonProperty $json 'useAcrylicInTabRow' $true
-            Set-JsonProperty $json 'centerOnLaunch'     $true
-            Set-JsonProperty $json 'snapToGridOnResize' $true
-            Set-JsonProperty $json 'focusFollowMouse'   $false
+            # showTabsInTitlebar + alwaysShowTabs are what actually shrink the
+            # top bar; see "Minimising the top bar" in the README.
+            Set-JsonProperty $json 'showTabsInTitlebar'          ([bool]$Cfg.Window.ShowTabsInTitlebar)
+            Set-JsonProperty $json 'alwaysShowTabs'              ([bool]$Cfg.Window.AlwaysShowTabs)
+            Set-JsonProperty $json 'showTerminalTitleInTitlebar' ([bool]$Cfg.Window.ShowTitleInTitlebar)
+            Set-JsonProperty $json 'tabWidthMode'       $Cfg.Window.TabWidthMode
+            Set-JsonProperty $json 'useAcrylicInTabRow' ([bool]$Cfg.Window.AcrylicInTabRow)
+            Set-JsonProperty $json 'launchMode'         $Cfg.Window.LaunchMode
+            Set-JsonProperty $json 'centerOnLaunch'     ([bool]$Cfg.Window.CenterOnLaunch)
+            Set-JsonProperty $json 'snapToGridOnResize' ([bool]$Cfg.Window.SnapToGridOnResize)
+            Set-JsonProperty $json 'focusFollowMouse'   ([bool]$Cfg.Window.FocusFollowMouse)
 
             # -- keybindings -----------------------------------------------
             # Merged by key chord: any existing binding for the same keys is
             # replaced, everything else the user has set is left alone. These
             # use the legacy `command` form, which Terminal still honours
             # alongside the newer `id` entries already in the file.
-            $caelestiaKeys = @(
-                # jump between prompts, using the marks enabled above
-                [pscustomobject]@{ keys = 'ctrl+up';   command = [pscustomobject]@{ action = 'scrollToMark'; direction = 'previous' } }
-                [pscustomobject]@{ keys = 'ctrl+down'; command = [pscustomobject]@{ action = 'scrollToMark'; direction = 'next' } }
-                # panes
-                [pscustomobject]@{ keys = 'alt+shift+minus'; command = [pscustomobject]@{ action = 'splitPane'; split = 'down';  splitMode = 'duplicate' } }
-                [pscustomobject]@{ keys = 'alt+shift+plus';  command = [pscustomobject]@{ action = 'splitPane'; split = 'right'; splitMode = 'duplicate' } }
-                [pscustomobject]@{ keys = 'alt+left';  command = [pscustomobject]@{ action = 'moveFocus'; direction = 'left' } }
-                [pscustomobject]@{ keys = 'alt+right'; command = [pscustomobject]@{ action = 'moveFocus'; direction = 'right' } }
-                [pscustomobject]@{ keys = 'alt+up';    command = [pscustomobject]@{ action = 'moveFocus'; direction = 'up' } }
-                [pscustomobject]@{ keys = 'alt+down';  command = [pscustomobject]@{ action = 'moveFocus'; direction = 'down' } }
-                [pscustomobject]@{ keys = 'ctrl+shift+z'; command = 'togglePaneZoom' }
-                # quake-style dropdown: slides a terminal down from the top of
-                # the screen from anywhere. Requires Terminal to be running.
-                # monitor must be one of: any | toCurrent | toMouse.
-                # 'toCursor' is NOT valid and rejects the entire settings file,
-                # which drops Terminal to stock defaults with only a dialog.
-                [pscustomobject]@{ keys = 'win+sc(41)'; command = [pscustomobject]@{
-                    action = 'globalSummon'; name = '_quake'
-                    dropdownDuration = 150; toggleVisibility = $true; monitor = 'toMouse' } }
-            )
-            $existing = @()
-            if ($json.PSObject.Properties.Name -contains 'keybindings' -and $json.keybindings) {
-                $mine = $caelestiaKeys.keys
-                $existing = @($json.keybindings | Where-Object {
-                    -not ($_.PSObject.Properties.Name -contains 'keys' -and $mine -contains $_.keys)
-                })
+            # A chord set to $null in config.psd1 is skipped entirely.
+            if ($Cfg.Keybindings.Enabled) {
+                $k = $Cfg.Keybindings
+                $wanted = @(
+                    @{ Key = $k.ScrollToPreviousMark; Cmd = [pscustomobject]@{ action = 'scrollToMark'; direction = 'previous' } }
+                    @{ Key = $k.ScrollToNextMark;     Cmd = [pscustomobject]@{ action = 'scrollToMark'; direction = 'next' } }
+                    @{ Key = $k.SplitDown;  Cmd = [pscustomobject]@{ action = 'splitPane'; split = 'down';  splitMode = 'duplicate' } }
+                    @{ Key = $k.SplitRight; Cmd = [pscustomobject]@{ action = 'splitPane'; split = 'right'; splitMode = 'duplicate' } }
+                    @{ Key = $k.FocusLeft;  Cmd = [pscustomobject]@{ action = 'moveFocus'; direction = 'left' } }
+                    @{ Key = $k.FocusRight; Cmd = [pscustomobject]@{ action = 'moveFocus'; direction = 'right' } }
+                    @{ Key = $k.FocusUp;    Cmd = [pscustomobject]@{ action = 'moveFocus'; direction = 'up' } }
+                    @{ Key = $k.FocusDown;  Cmd = [pscustomobject]@{ action = 'moveFocus'; direction = 'down' } }
+                    @{ Key = $k.ZoomPane;        Cmd = 'togglePaneZoom' }
+                    @{ Key = $k.ToggleFocusMode; Cmd = 'toggleFocusMode' }
+                    # Quake dropdown. monitor must be any | toCurrent | toMouse;
+                    # an invalid value rejects the ENTIRE settings file and drops
+                    # Terminal to stock defaults behind one dialog.
+                    @{ Key = $k.QuakeSummon; Cmd = [pscustomobject]@{
+                        action = 'globalSummon'; name = '_quake'
+                        dropdownDuration = [int]$k.QuakeDropdownMs
+                        toggleVisibility = $true; monitor = $k.QuakeMonitor } }
+                )
+                $caelestiaKeys = @(
+                    $wanted | Where-Object { $_.Key } |
+                        ForEach-Object { [pscustomobject]@{ keys = $_.Key; command = $_.Cmd } }
+                )
+                $existing = @()
+                if ($json.PSObject.Properties.Name -contains 'keybindings' -and $json.keybindings) {
+                    $mine = @($caelestiaKeys.keys)
+                    $existing = @($json.keybindings | Where-Object {
+                        -not ($_.PSObject.Properties.Name -contains 'keys' -and $mine -contains $_.keys)
+                    })
+                }
+                Set-JsonProperty $json 'keybindings' (@($existing) + $caelestiaKeys)
             }
-            Set-JsonProperty $json 'keybindings' (@($existing) + $caelestiaKeys)
 
             # -- default profile -------------------------------------------
             # Windows Terminal keeps Windows PowerShell 5.1 as the default even
@@ -757,7 +833,7 @@ function Deploy-WindowsTerminal {
             # IntelliSense, faster startup) is ever seen. Point it at PowerShell 7
             # when Terminal has generated a profile for it. -KeepDefaultProfile
             # opts out.
-            if (-not $KeepDefaultProfile) {
+            if ($Cfg.Terminal.UsePowerShell7AsDefault -and -not $KeepDefaultProfile) {
                 $ps7 = $json.profiles.list | Where-Object {
                     $_.PSObject.Properties.Name -contains 'source' -and
                     $_.source -eq 'Windows.Terminal.PowershellCore'
@@ -870,9 +946,15 @@ function Write-SchemeColors {
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
 
     $body = @"
-# GENERATED by install.ps1 from theme\caelestia.psd1 (scheme: $ActivePaletteName).
-# Edits here are overwritten on the next run -- change the scheme instead.
+# GENERATED by install.ps1 from config.psd1 (scheme: $ActivePaletteName).
+# Edits here are overwritten on the next run -- change config.psd1 instead.
 @{
+    # Shell toggles, read by the profile.
+    Starship              = `$$($Cfg.Shell.Starship)
+    Fastfetch             = `$$($Cfg.Shell.Fastfetch)
+    Predictions           = `$$($Cfg.Shell.Predictions)
+    HistorySearchOnArrows = `$$($Cfg.Shell.HistorySearchOnArrows)
+
     Command          = '$($ActivePalette.PromptPrimary)'
     Parameter        = '$($ActivePalette.PromptSecondary)'
     Operator         = '$($ActivePalette.PromptTertiary)'
@@ -922,7 +1004,7 @@ function Deploy-Profile {
     Add-Result 'PowerShell profile' $(if ($changed) { 'done' } else { 'present' })
 
     # conda's own prompt prefix fights the starship theme.
-    if (Get-Command conda -ErrorAction SilentlyContinue) {
+    if ($Cfg.Shell.DisableCondaPrompt -and (Get-Command conda -ErrorAction SilentlyContinue)) {
         $current = (conda config --show changeps1 2>&1 | Out-String)
         if ($current -notmatch 'changeps1:\s*False') {
             if ($PSCmdlet.ShouldProcess('conda', 'set changeps1 false')) {
